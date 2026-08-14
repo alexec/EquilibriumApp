@@ -1,0 +1,28 @@
+name: Equilibrium
+options:
+  bundleIdPrefix: com.alexcollins
+  deploymentTarget:
+    macOS: "13.0"
+targets:
+  Equilibrium:
+    type: application
+    platform: macOS
+    sources:
+      - path: Equilibrium
+        excludes:
+          - "AppIcon.icns"
+          - "AppIcon.iconset/**"
+          - "AppIcon.png"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alexcollins.Equilibrium
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
