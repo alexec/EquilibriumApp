@@ -62,7 +62,7 @@ struct DailyBarChartView: View {
         .padding(16)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.08))
+                .fill(Color.primary.opacity(0.06))
         )
     }
 

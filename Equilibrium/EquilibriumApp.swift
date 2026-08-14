@@ -5,7 +5,7 @@ struct EquilibriumApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 480, idealHeight: 520)
+                .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 480, maxHeight: 480)
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)

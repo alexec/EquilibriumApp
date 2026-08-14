@@ -38,7 +38,7 @@ struct ContentView: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             viewModel.refresh()
             viewModel.startAutoRefresh()
