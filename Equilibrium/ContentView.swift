@@ -35,6 +35,7 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
+                aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
                 onMeetingSplitChange: { day, minutes in
                     viewModel.setMeetingSplit(for: day, meetingMinutes: minutes)
                 },
