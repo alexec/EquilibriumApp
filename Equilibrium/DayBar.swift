@@ -25,6 +25,7 @@ struct DayBar: View {
 
     @State private var dragTranslation: CGFloat = 0
     @State private var isDragging = false
+    @State private var isPulsingHigh = false
 
     private static let focusColor = Color.blue
     private static let meetingColor = Color.yellow
@@ -167,14 +168,22 @@ struct DayBar: View {
             }
         }
         .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-        // A red outline around the whole stack signals >8h without giving
-        // up the segment fill colors to a 4th "over budget" color.
+        // A slowly pulsing red outline around the whole stack signals >8h
+        // without giving up the segment fill colors to a 4th "over budget"
+        // color. Pulsing (vs. a static outline) reads more clearly as "this
+        // needs attention" rather than just another fixed color in the mix.
         .overlay(
             Group {
                 if isOver8h {
                     Capsule()
                         .stroke(Color.red, lineWidth: 1.5)
                         .frame(width: barWidth, height: max(barHeight, barWidth))
+                        .opacity(isPulsingHigh ? 1.0 : 0.25)
+                        .onAppear {
+                            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                                isPulsingHigh = true
+                            }
+                        }
                 }
             }
         )
