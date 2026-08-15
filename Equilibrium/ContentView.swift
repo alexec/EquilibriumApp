@@ -24,6 +24,18 @@ struct ContentView: View {
                 }
             }
 
+            if let insight = viewModel.weeklyInsight {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Text(insight)
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             DailyBarChartView(
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
