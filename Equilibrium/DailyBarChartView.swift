@@ -21,6 +21,7 @@ struct DailyBarChartView: View {
     /// the deterministic `WeekHeaderStats.fallbackSentence` is shown instead.
     let aiWeekSummary: (Date) -> String?
     let onMeetingChange: (Date, UUID, Date, Date) -> Void
+    let onWorkdayChange: (Date, Date, Date) -> Void
     let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
@@ -132,6 +133,7 @@ struct DailyBarChartView: View {
         return VStack(spacing: 2) {
             DayBar(
                 span: span,
+                day: day,
                 chartHeight: chartHeight,
                 isWeekend: isWeekend(day),
                 barWidth: Self.barWidth,
@@ -142,6 +144,9 @@ struct DailyBarChartView: View {
                 workdayEndHour: workdayEndHour,
                 onMeetingChange: { meetingID, newStart, newEnd in
                     onMeetingChange(day, meetingID, newStart, newEnd)
+                },
+                onWorkdayChange: { newStart, newEnd in
+                    onWorkdayChange(day, newStart, newEnd)
                 }
             )
             Text(weekdayLabel(day))

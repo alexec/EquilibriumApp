@@ -230,6 +230,29 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
     }
 
+    /// Creates or edits a day's workday span — from dragging its top edge
+    /// (start), bottom edge (end), or middle (move) on the day bar, or
+    /// drawing a brand-new one on a day with no data yet. Marks the day
+    /// `isManual` (the same flag that already protects hand-set spans from
+    /// automatic wake/sleep recompute) so this sticks. Existing meetings/
+    /// break data on the day are preserved; if calendar access is granted
+    /// and the day's meetings haven't been hand-edited, they're refetched
+    /// immediately against the new span rather than waiting for the next
+    /// auto-refresh.
+    func updateWorkday(for date: Date, newStart: Date, newEnd: Date) {
+        let key = dayKey(for: date)
+        var span = spansByDay[key] ?? WorkdaySpan(dayKey: key, start: newStart, end: newEnd)
+        span.start = newStart
+        span.end = newEnd
+        if calendarAccessGranted, !span.meetingsManuallyEdited {
+            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            span.hasCalendarData = true
+        }
+        spansByDay = store.setManualSpan(span)
+        refreshWeekHeaderSummaries()
+    }
+
     /// Updates one meeting's start/end — from dragging its top edge, bottom
     /// edge, or body on the day bar — clamped within that day's start...end.
     /// Marks the day `meetingsManuallyEdited` so the next calendar refresh

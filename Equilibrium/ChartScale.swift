@@ -35,4 +35,11 @@ enum ChartScale {
         guard chartHeight > 0 else { return 0 }
         return (endHour - startHour) * 3600 / Double(chartHeight)
     }
+
+    /// The inverse of `fraction(of:)`: the hour-of-day a given fraction
+    /// (0...1) down the chart corresponds to. Used to turn a raw drag
+    /// position into a clock time when drawing a brand-new workday span.
+    static func hour(atFraction fraction: Double) -> Double {
+        startHour + fraction.clamped(to: 0...1) * (endHour - startHour)
+    }
 }

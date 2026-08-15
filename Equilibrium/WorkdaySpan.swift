@@ -23,8 +23,11 @@ struct MeetingBlock: Codable, Identifiable, Equatable {
 struct WorkdaySpan: Codable, Identifiable {
     var id: String { dayKey }
     let dayKey: String // "yyyy-MM-dd" in local time
-    let start: Date
-    let end: Date
+    /// Mutable (unlike the historical wake/sleep-derived fields) since the
+    /// whole workday span is now directly drag-editable — see
+    /// `WorkHistoryViewModel.updateWorkday(for:newStart:newEnd:)`.
+    var start: Date
+    var end: Date
 
     /// Minutes subtracted from worked hours for breaks (lunch, etc.), always
     /// a multiple of 30. Always 0 for automatically-detected spans; only

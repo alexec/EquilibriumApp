@@ -23,17 +23,24 @@ private struct WindowDragBlocker: NSViewRepresentable {
 #endif
 
 /// A single day's vertical bar: renders actual worked hours when present,
-/// otherwise a recommendation (or "over budget") placeholder.
+/// otherwise a recommendation (or "over budget") placeholder — or, for a
+/// day with no data at all yet, an empty column you can drag on to create
+/// one from scratch (see `WorkdayBlockView`).
 ///
-/// The bar itself is a plain "work" capsule (gray) from start to end, with
-/// a "break" capsule (lighter gray) beneath it sized by the auto-detected
-/// break — the only two things we don't have precise times for. Meetings
-/// (real calendar times) are drawn as separate yellow blocks positioned at
-/// their actual times, each individually drag-resizable/movable — see
+/// The workday itself (Work capsule + Break capsule beneath it, sized by
+/// the auto-detected break — the one thing here without a precise time) is
+/// drag-editable the same three ways as a meeting: top edge = start,
+/// bottom edge = end, middle = move. Meetings (real calendar times) are
+/// drawn as separate yellow blocks on top, positioned at their actual
+/// times, each independently drag-editable the same way — see
 /// `MeetingBlockView`. There's no "focus" segment: it was always a derived
 /// guess (effective hours minus meetings), never a directly known quantity.
 struct DayBar: View {
     let span: WorkdaySpan?
+    /// The calendar day this bar represents — needed to construct a
+    /// brand-new span (with real dates, not just hour-of-day) when the
+    /// user draws one on a day with no data yet.
+    let day: Date
     let chartHeight: CGFloat
     let isWeekend: Bool
     let barWidth: CGFloat
@@ -47,9 +54,10 @@ struct DayBar: View {
     /// Called with a meeting's id and its new (start, end) once a drag
     /// (resize-top, resize-bottom, or move) ends.
     var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
-
-    private static let workColor = Color.gray
-    private static let breakColor = Color.gray.opacity(0.35)
+    /// Called with the day's new (start, end) once a drag on the workday
+    /// itself ends — whether resizing/moving an existing day or drawing a
+    /// brand new one from scratch.
+    var onWorkdayChange: (Date, Date) -> Void = { _, _ in }
 
     private var calendar: Calendar { .current }
 
@@ -123,9 +131,15 @@ struct DayBar: View {
                 }
             }
 
-            if let span, span.hours > 0 {
-                daySegments(span: span)
+            WorkdayBlockView(
+                span: span,
+                day: day,
+                chartHeight: chartHeight,
+                barWidth: barWidth,
+                onChange: onWorkdayChange
+            )
 
+            if let span, span.hours > 0 {
                 ForEach(span.meetings) { meeting in
                     MeetingBlockView(
                         meeting: meeting,
@@ -154,37 +168,6 @@ struct DayBar: View {
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
-    }
-
-    /// The "work" and "break" capsules for a day with real hours — the
-    /// only two things drawn proportionally rather than at a real time,
-    /// since intra-day break gaps are only known as a total duration, not
-    /// exactly when they happened.
-    private func daySegments(span: WorkdaySpan) -> some View {
-        let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-        let endFrac = ChartScale.fraction(of: hourFraction(span.end))
-        let topOffset = CGFloat(startFrac) * chartHeight
-        let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
-
-        let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
-        let workedHeight = barHeight * workedFraction
-        let breakHeight = max(barHeight - workedHeight, 0)
-
-        return ZStack(alignment: .top) {
-            if workedHeight > 0 {
-                Capsule()
-                    .fill(Self.workColor)
-                    .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
-            }
-            if breakHeight > 0 {
-                Capsule()
-                    .fill(Self.breakColor)
-                    .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
-                    .offset(y: workedHeight)
-            }
-        }
-        .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-        .offset(y: topOffset)
     }
 }
 
@@ -308,6 +291,217 @@ private struct MeetingBlockView: View {
     /// Rounds to the nearest 5 minutes.
     private func snap(_ date: Date) -> Date {
         let interval: TimeInterval = 5 * 60
+        let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
+        return Date(timeIntervalSinceReferenceDate: rounded)
+    }
+}
+
+/// The workday itself: Work + Break capsules for a day that already has
+/// data, drag-editable the same three ways as a meeting block (top edge =
+/// start, bottom edge = end, middle = move); or, for a day with no data at
+/// all yet, a single click-and-drag anywhere in the column draws a
+/// brand-new span from scratch, like dragging out a new event in a
+/// calendar day view — order-independent (drag up or down, whichever end
+/// you started from).
+private struct WorkdayBlockView: View {
+    let span: WorkdaySpan?
+    let day: Date
+    let chartHeight: CGFloat
+    let barWidth: CGFloat
+    let onChange: (Date, Date) -> Void
+
+    private enum DragMode {
+        case moveWhole, resizeTop, resizeBottom
+    }
+
+    @State private var dragMode: DragMode?
+    @State private var dragPointsDelta: CGFloat = 0
+
+    @State private var drawStartY: CGFloat?
+    @State private var drawCurrentY: CGFloat?
+
+    private static let edgeHandleHeight: CGFloat = 8
+    private static let splitThreshold: CGFloat = 24
+    private static let workColor = Color.gray
+    private static let breakColor = Color.gray.opacity(0.35)
+    private static let drawColor = Color.gray.opacity(0.5)
+
+    private var secondsPerPoint: Double {
+        ChartScale.secondsPerPoint(chartHeight: chartHeight)
+    }
+
+    var body: some View {
+        if let span, span.hours > 0 {
+            existingSpanView(span: span)
+        } else {
+            emptyDayView()
+        }
+    }
+
+    // MARK: - Existing span: three-way edit
+
+    @ViewBuilder
+    private func existingSpanView(span: WorkdaySpan) -> some View {
+        let liveStart: Date = {
+            guard dragMode == .resizeTop || dragMode == .moveWhole else { return span.start }
+            return span.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        }()
+        let liveEnd: Date = {
+            guard dragMode == .resizeBottom || dragMode == .moveWhole else { return span.end }
+            return span.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        }()
+
+        let startFrac = ChartScale.fraction(of: liveStart)
+        let endFrac = ChartScale.fraction(of: liveEnd)
+        let topOffset = CGFloat(startFrac) * chartHeight
+        let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
+
+        let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
+        let workedHeight = barHeight * workedFraction
+        let breakHeight = max(barHeight - workedHeight, 0)
+        let canSplitHandles = barHeight >= Self.splitThreshold
+
+        ZStack(alignment: .top) {
+            if workedHeight > 0 {
+                Capsule()
+                    .fill(Self.workColor)
+                    .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
+            }
+            if breakHeight > 0 {
+                Capsule()
+                    .fill(Self.breakColor)
+                    .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
+                    .offset(y: workedHeight)
+            }
+
+            if canSplitHandles {
+                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight, span: span)
+                dragHandle(mode: .moveWhole, height: barHeight - 2 * Self.edgeHandleHeight, span: span)
+                    .offset(y: Self.edgeHandleHeight)
+                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight, span: span)
+                    .offset(y: barHeight - Self.edgeHandleHeight)
+            } else {
+                dragHandle(mode: .moveWhole, height: barHeight, span: span)
+            }
+        }
+        .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
+        .offset(y: topOffset)
+    }
+
+    private func dragHandle(mode: DragMode, height: CGFloat, span: WorkdaySpan) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: max(height, 1))
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        dragMode = mode
+                        dragPointsDelta = value.translation.height
+                    }
+                    .onEnded { value in
+                        let delta = Double(value.translation.height) * secondsPerPoint
+                        var finalStart = span.start
+                        var finalEnd = span.end
+                        switch mode {
+                        case .moveWhole:
+                            finalStart = span.start.addingTimeInterval(delta)
+                            finalEnd = span.end.addingTimeInterval(delta)
+                        case .resizeTop:
+                            finalStart = span.start.addingTimeInterval(delta)
+                        case .resizeBottom:
+                            finalEnd = span.end.addingTimeInterval(delta)
+                        }
+                        dragMode = nil
+                        dragPointsDelta = 0
+
+                        let snappedStart = snap(finalStart)
+                        let snappedEnd = snap(finalEnd)
+                        if snappedStart < snappedEnd {
+                            onChange(snappedStart, snappedEnd)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering {
+                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            #endif
+    }
+
+    // MARK: - Empty day: draw a new one
+
+    @ViewBuilder
+    private func emptyDayView() -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: chartHeight)
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 4)
+                    .onChanged { value in
+                        if drawStartY == nil { drawStartY = value.startLocation.y }
+                        drawCurrentY = value.location.y
+                    }
+                    .onEnded { value in
+                        guard let startY = drawStartY else { return }
+                        let endY = value.location.y
+                        let a = date(atY: min(startY, endY))
+                        let b = date(atY: max(startY, endY))
+                        drawStartY = nil
+                        drawCurrentY = nil
+
+                        let snappedA = snap(a)
+                        let snappedB = snap(b)
+                        if snappedA < snappedB {
+                            onChange(snappedA, snappedB)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering { NSCursor.crosshair.push() } else { NSCursor.pop() }
+            }
+            #endif
+            .overlay(
+                Group {
+                    if let startY = drawStartY, let currentY = drawCurrentY {
+                        let top = min(startY, currentY)
+                        let height = max(abs(currentY - startY), barWidth / 2)
+                        Capsule()
+                            .fill(Self.drawColor)
+                            .frame(width: barWidth, height: height)
+                            .offset(y: top)
+                            .allowsHitTesting(false)
+                    }
+                }
+            )
+    }
+
+    /// Converts a raw Y position within `chartHeight` into a real `Date` on
+    /// `day`, via `ChartScale`'s inverse mapping.
+    private func date(atY y: CGFloat) -> Date {
+        let fraction = chartHeight > 0 ? Double(y / chartHeight) : 0
+        let hour = ChartScale.hour(atFraction: fraction)
+        let hourInt = Int(hour)
+        let minuteInt = Int((hour - Double(hourInt)) * 60)
+        return Calendar.current.date(bySettingHour: hourInt, minute: minuteInt, second: 0, of: day) ?? day
+    }
+
+    /// Rounds to the nearest 15 minutes — coarser than a meeting's 5, since
+    /// this is setting the whole workday.
+    private func snap(_ date: Date) -> Date {
+        let interval: TimeInterval = 15 * 60
         let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
         return Date(timeIntervalSinceReferenceDate: rounded)
     }

@@ -38,6 +38,9 @@ struct ContentView: View {
                 onMeetingChange: { day, meetingID, newStart, newEnd in
                     viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
+                onWorkdayChange: { day, newStart, newEnd in
+                    viewModel.updateWorkday(for: day, newStart: newStart, newEnd: newEnd)
+                },
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
