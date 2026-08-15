@@ -20,17 +20,20 @@ enum WeeklyInsightGenerator {
     /// A completed (or in-progress) week's average daily breakdown, used
     /// both as the LLM prompt's input and as the data behind the
     /// deterministic fallback sentence shown when the model is unavailable.
+    ///
+    /// No "focus time" here — it was always a derived guess (effective
+    /// hours minus meetings), never a directly measured quantity, so it's
+    /// been dropped entirely. Only meetings (real calendar times) and work/
+    /// break (from wake/sleep logs) are things we actually know.
     struct WeekHeaderStats: Equatable {
         let workAvgHours: Double
         let breakAvgHours: Double
         let meetingAvgHours: Double?
-        let focusAvgHours: Double?
 
-        /// Averages effective/break/meeting/focus hours per weekday across
-        /// whichever days in `spans` have any recorded data. Meeting/focus
-        /// only average over days with calendar data (or a manual split
-        /// override); nil when no day in the week has either. Returns nil
-        /// when no day has any data at all.
+        /// Averages effective/break/meeting hours per weekday across
+        /// whichever days in `spans` have any recorded data. Meeting only
+        /// averages over days with calendar data; nil when no day in the
+        /// week has any. Returns nil when no day has any data at all.
         static func compute(from spans: [WorkdaySpan?]) -> WeekHeaderStats? {
             let daysWithData = spans.compactMap { $0 }.filter { $0.hours > 0 }
             guard !daysWithData.isEmpty else { return nil }
@@ -38,20 +41,18 @@ enum WeeklyInsightGenerator {
             let workAvg = daysWithData.reduce(0.0) { $0 + $1.effectiveHours } / Double(daysWithData.count)
             let breakAvg = daysWithData.reduce(0.0) { $0 + Double($1.breakMinutesUsed) / 60.0 } / Double(daysWithData.count)
 
-            let daysWithMeetingData = daysWithData.filter { $0.displayMeetingMinutes != nil }
+            let daysWithMeetingData = daysWithData.filter { $0.hasCalendarData }
             let meetingAvg = daysWithMeetingData.isEmpty ? nil :
-                daysWithMeetingData.reduce(0.0) { $0 + Double($1.displayMeetingMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
-            let focusAvg = daysWithMeetingData.isEmpty ? nil :
-                daysWithMeetingData.reduce(0.0) { $0 + Double($1.focusMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
+                daysWithMeetingData.reduce(0.0) { $0 + Double($1.meetingMinutes) / 60.0 } / Double(daysWithMeetingData.count)
 
-            return WeekHeaderStats(workAvgHours: workAvg, breakAvgHours: breakAvg, meetingAvgHours: meetingAvg, focusAvgHours: focusAvg)
+            return WeekHeaderStats(workAvgHours: workAvg, breakAvgHours: breakAvg, meetingAvgHours: meetingAvg)
         }
 
         /// The deterministic "Nh meetings/day, ..." sentence, used whenever
         /// the LLM is unavailable or hasn't produced a summary yet.
         var fallbackSentence: String {
-            if let meetingAvgHours, let focusAvgHours {
-                return "\(HoursFormat.string(meetingAvgHours)) meetings/day, \(HoursFormat.string(focusAvgHours)) focus time/day, \(HoursFormat.string(breakAvgHours)) breaks a day, and \(HoursFormat.string(workAvgHours)) work/day"
+            if let meetingAvgHours {
+                return "\(HoursFormat.string(meetingAvgHours)) meetings/day, \(HoursFormat.string(breakAvgHours)) breaks a day, and \(HoursFormat.string(workAvgHours)) work/day"
             }
             return "\(HoursFormat.string(breakAvgHours)) breaks a day, and \(HoursFormat.string(workAvgHours)) work/day"
         }
@@ -81,11 +82,11 @@ enum WeeklyInsightGenerator {
             tracking app, writing a one-line caption that sits directly above a \
             small chart of one work week. Given that week's average-per-weekday \
             breakdown, write ONE short sentence (max ~16 words) starting with \
-            "You worked" that summarizes the week's shape — mention the meeting/ \
-            focus balance only if both are given below. Never invent numbers that \
-            weren't given to you. When a duration is a half hour, write it with \
-            the ½ symbol (e.g. "3½h"), never "3.5h" or "three and a half hours". \
-            No markdown, no emoji, no exclamation marks, no preamble like \
+            "You worked" that summarizes the week's shape — mention meetings \
+            only if given below. Never invent numbers that weren't given to \
+            you. When a duration is a half hour, write it with the ½ symbol \
+            (e.g. "3½h"), never "3.5h" or "three and a half hours". No \
+            markdown, no emoji, no exclamation marks, no preamble like \
             "Here's" — just the sentence itself.
             """
         })
@@ -93,9 +94,8 @@ enum WeeklyInsightGenerator {
         // Rounded to the nearest half hour before it ever reaches the model,
         // so it can't echo back noisy precision like "8.0" or "7.83".
         var lines = ["Average per weekday this week:", "Work: \(HoursFormat.string(stats.workAvgHours))"]
-        if let meeting = stats.meetingAvgHours, let focus = stats.focusAvgHours {
+        if let meeting = stats.meetingAvgHours {
             lines.append("Meetings: \(HoursFormat.string(meeting))")
-            lines.append("Focus: \(HoursFormat.string(focus))")
         }
         lines.append("Breaks: \(HoursFormat.string(stats.breakAvgHours))")
 

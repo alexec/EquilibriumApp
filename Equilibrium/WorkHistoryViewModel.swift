@@ -139,7 +139,8 @@ final class WorkHistoryViewModel: ObservableObject {
     }
 
     /// Re-reads calendar events for all days that have a WorkdaySpan and
-    /// updates each span's `meetingMinutes` / `longestFocusBlockMinutes`.
+    /// updates each span's `meetings`. Days with hand-dragged meetings
+    /// (`meetingsManuallyEdited`) are left alone — see `updateMeeting`.
     @MainActor
     func refreshMeetingData() async {
         let currentSpans = spansByDay
@@ -151,19 +152,19 @@ final class WorkHistoryViewModel: ObservableObject {
 
         for (dayKey, span) in currentSpans {
             guard span.hours > 0, let date = formatter.date(from: dayKey) else { continue }
+            guard !span.meetingsManuallyEdited else { continue }
             let events = CalendarStore.shared.meetingEvents(on: date, span: span)
-            let (meetingMinutes, longestFocus) = MeetingCalculator.compute(events: events, span: span)
             var annotated = span
-            annotated.meetingMinutes = meetingMinutes
-            annotated.longestFocusBlockMinutes = longestFocus
+            annotated.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            annotated.hasCalendarData = true
             updated[dayKey] = annotated
         }
 
         spansByDay = updated
         // Persist updated spans so meeting data survives across launches.
         store.save(updated)
-        // Meeting data just landed, which affects the meeting/focus split
-        // the week summaries describe — refresh those that changed.
+        // Meeting data just landed, which affects what the week summaries
+        // describe — refresh those that changed.
         refreshWeekHeaderSummaries()
     }
 
@@ -226,26 +227,39 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
     }
 
-    /// Sets a manual meeting/focus split for a day — from dragging the
-    /// boundary on its bar — clamped to that day's effective (worked)
-    /// minutes. Start/end/break are untouched and stay fully automatic.
-    func setMeetingSplit(for date: Date, meetingMinutes: Int) {
+    /// Updates one meeting's start/end — from dragging its top edge, bottom
+    /// edge, or body on the day bar — clamped within that day's start...end.
+    /// Marks the day `meetingsManuallyEdited` so the next calendar refresh
+    /// doesn't overwrite the edit. Start/end/break are untouched.
+    func updateMeeting(for date: Date, meetingID: UUID, newStart: Date, newEnd: Date) {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
-        let effectiveMinutes = max(Int(span.effectiveHours * 60.0), 0)
-        span.manualMeetingMinutes = min(max(meetingMinutes, 0), effectiveMinutes)
+        guard let index = span.meetings.firstIndex(where: { $0.id == meetingID }) else { return }
+
+        let clampedStart = min(max(newStart, span.start), span.end)
+        let clampedEnd = min(max(newEnd, span.start), span.end)
+        guard clampedStart < clampedEnd else { return }
+
+        span.meetings[index].start = clampedStart
+        span.meetings[index].end = clampedEnd
+        span.meetingsManuallyEdited = true
         spansByDay[key] = span
         store.save(spansByDay)
+        refreshWeekHeaderSummaries()
     }
 
-    /// Clears a manual meeting/focus split, reverting the day's display to
-    /// the calendar-derived meeting time.
-    func resetMeetingSplit(for date: Date) {
+    /// Clears manual meeting edits for a day and immediately re-fetches
+    /// from the calendar, reverting to calendar-derived meeting blocks.
+    func resetMeetings(for date: Date) {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
-        span.manualMeetingMinutes = nil
+        span.meetingsManuallyEdited = false
+        let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+        span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+        span.hasCalendarData = true
         spansByDay[key] = span
         store.save(spansByDay)
+        refreshWeekHeaderSummaries()
     }
 
     /// A rolling window of full Sat-Fri weeks ending with the current week

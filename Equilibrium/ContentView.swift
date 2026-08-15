@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
-    @State private var showsAbout = false
     @State private var showsPreferences = false
 
     var body: some View {
@@ -26,16 +25,6 @@ struct ContentView: View {
                         showsPreferences = false
                     }
                 }
-                Button {
-                    showsAbout = true
-                } label: {
-                    Image(systemName: "questionmark.circle")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showsAbout) {
-                    AboutPopover()
-                }
             }
 
             DailyBarChartView(
@@ -45,10 +34,10 @@ struct ContentView: View {
                 workdayStartHour: viewModel.preferences.workdayStartHour,
                 workdayEndHour: viewModel.preferences.workdayEndHour,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
-                onMeetingSplitChange: { day, minutes in
-                    viewModel.setMeetingSplit(for: day, meetingMinutes: minutes)
+                onMeetingChange: { day, meetingID, newStart, newEnd in
+                    viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
-                onResetMeetingSplit: { day in viewModel.resetMeetingSplit(for: day) },
+                onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
         }

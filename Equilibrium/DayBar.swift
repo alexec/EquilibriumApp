@@ -25,11 +25,13 @@ private struct WindowDragBlocker: NSViewRepresentable {
 /// A single day's vertical bar: renders actual worked hours when present,
 /// otherwise a recommendation (or "over budget") placeholder.
 ///
-/// When calendar data (or a manual override) is available, the worked
-/// portion of the bar splits into two drag-resizable segments — Focus
-/// (blue, top) and Meeting (yellow, below it) — followed by a fixed Break
-/// segment (gray, bottom): whatever part of the span isn't meeting time and
-/// isn't focus time. Without calendar data there's just Focus/Break.
+/// The bar itself is a plain "work" capsule (gray) from start to end, with
+/// a "break" capsule (lighter gray) beneath it sized by the auto-detected
+/// break — the only two things we don't have precise times for. Meetings
+/// (real calendar times) are drawn as separate yellow blocks positioned at
+/// their actual times, each individually drag-resizable/movable — see
+/// `MeetingBlockView`. There's no "focus" segment: it was always a derived
+/// guess (effective hours minus meetings), never a directly known quantity.
 struct DayBar: View {
     let span: WorkdaySpan?
     let chartHeight: CGFloat
@@ -42,17 +44,12 @@ struct DayBar: View {
     /// position the dashed "normal workday" track.
     let workdayStartHour: Double
     let workdayEndHour: Double
-    /// Called with the new meeting-minute value while the focus/meeting
-    /// boundary is being dragged, and again with the final value on release.
-    var onMeetingSplitChange: (Int) -> Void = { _ in }
+    /// Called with a meeting's id and its new (start, end) once a drag
+    /// (resize-top, resize-bottom, or move) ends.
+    var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
 
-    @State private var dragTranslation: CGFloat = 0
-    @State private var isDragging = false
-    @State private var isPulsingHigh = false
-
-    private static let focusColor = Color.blue
-    private static let meetingColor = Color.yellow
-    private static let breakColor = Color.gray.opacity(0.55)
+    private static let workColor = Color.gray
+    private static let breakColor = Color.gray.opacity(0.35)
 
     private var calendar: Calendar { .current }
 
@@ -129,6 +126,19 @@ struct DayBar: View {
             if let span, span.hours > 0 {
                 daySegments(span: span)
 
+                ForEach(span.meetings) { meeting in
+                    MeetingBlockView(
+                        meeting: meeting,
+                        chartHeight: chartHeight,
+                        barWidth: barWidth,
+                        dayStart: span.start,
+                        dayEnd: span.end,
+                        onChange: { newStart, newEnd in
+                            onMeetingChange(meeting.id, newStart, newEnd)
+                        }
+                    )
+                }
+
                 if showsHoursLabel {
                     let startFrac = ChartScale.fraction(of: hourFraction(span.start))
                     let topOffset = CGFloat(startFrac) * chartHeight
@@ -145,114 +155,159 @@ struct DayBar: View {
         .contentShape(Rectangle())
     }
 
-    /// The stacked Focus/Meeting/Break capsules for a day with real hours,
-    /// plus the drag handle on the Focus/Meeting boundary when a split
-    /// (calendar-derived or manually overridden) is available to adjust.
-    @ViewBuilder
+    /// The "work" and "break" capsules for a day with real hours — the
+    /// only two things drawn proportionally rather than at a real time,
+    /// since intra-day break gaps are only known as a total duration, not
+    /// exactly when they happened.
     private func daySegments(span: WorkdaySpan) -> some View {
         let startFrac = ChartScale.fraction(of: hourFraction(span.start))
         let endFrac = ChartScale.fraction(of: hourFraction(span.end))
         let topOffset = CGFloat(startFrac) * chartHeight
         let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
 
-        // Worked portion (focus + meeting) vs. break, in points.
         let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
         let workedHeight = barHeight * workedFraction
         let breakHeight = max(barHeight - workedHeight, 0)
 
-        // Live-dragged meeting height, clamped within the worked region.
-        let baseMeetingFraction = CGFloat(span.meetingFraction ?? 0)
-        let baseMeetingHeight = workedHeight * baseMeetingFraction
-        let meetingHeight: CGFloat = {
-            guard span.meetingFraction != nil else { return 0 }
-            let raw = isDragging ? (baseMeetingHeight - dragTranslation) : baseMeetingHeight
-            return min(max(raw, 0), workedHeight)
-        }()
-        let focusHeight = max(workedHeight - meetingHeight, 0)
-
-        let isOver8h = span.roundedUpHours > 8
-
-        ZStack(alignment: .top) {
-            if focusHeight > 0 {
+        return ZStack(alignment: .top) {
+            if workedHeight > 0 {
                 Capsule()
-                    .fill(Self.focusColor)
-                    .frame(width: barWidth, height: max(focusHeight, barWidth / 2))
-            }
-            if meetingHeight > 0 {
-                Capsule()
-                    .fill(Self.meetingColor)
-                    .frame(width: barWidth, height: max(meetingHeight, barWidth / 2))
-                    .offset(y: focusHeight)
+                    .fill(Self.workColor)
+                    .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
             }
             if breakHeight > 0 {
                 Capsule()
                     .fill(Self.breakColor)
                     .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
-                    .offset(y: focusHeight + meetingHeight)
+                    .offset(y: workedHeight)
             }
         }
         .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-        // A slowly pulsing red outline around the whole stack signals >8h
-        // without giving up the segment fill colors to a 4th "over budget"
-        // color. Pulsing (vs. a static outline) reads more clearly as "this
-        // needs attention" rather than just another fixed color in the mix.
-        .overlay(
-            Group {
-                if isOver8h {
-                    Capsule()
-                        .stroke(Color.red, lineWidth: 1.5)
-                        .frame(width: barWidth, height: max(barHeight, barWidth))
-                        .opacity(isPulsingHigh ? 1.0 : 0.25)
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                                isPulsingHigh = true
-                            }
-                        }
-                }
-            }
-        )
-        .overlay(
-            // Wide drag surface covering the whole bar — not just a thin
-            // strip on the boundary — so a drag started anywhere on the
-            // visible capsules is captured here. WindowDragBlocker (macOS
-            // only; see its doc comment) is what actually stops the window
-            // from moving; the gesture-priority settings below are backup,
-            // not the real fix.
-            Group {
-                if span.meetingFraction != nil, workedHeight > 0 {
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(width: barWidth + 20, height: max(barHeight, barWidth))
-                        .contentShape(Rectangle())
-                        #if os(macOS)
-                        .background(WindowDragBlocker())
-                        #endif
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    isDragging = true
-                                    dragTranslation = value.translation.height
-                                }
-                                .onEnded { value in
-                                    let effectiveMinutes = Int(span.effectiveHours * 60.0)
-                                    let finalMeetingHeight = min(max(baseMeetingHeight - value.translation.height, 0), workedHeight)
-                                    let finalFraction = workedHeight > 0 ? Double(finalMeetingHeight / workedHeight) : 0
-                                    // Snap to the nearest 5 minutes.
-                                    let rawMinutes = Int((finalFraction * Double(effectiveMinutes)).rounded())
-                                    let snapped = (rawMinutes / 5) * 5
-                                    isDragging = false
-                                    dragTranslation = 0
-                                    onMeetingSplitChange(snapped)
-                                }
-                        )
-                        #if os(macOS)
-                        .onHover { hovering in
-                            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-                        }
-                        #endif
-                }
-            }
-        )
         .offset(y: topOffset)
+    }
+}
+
+/// A single meeting, drawn at its real start/end time and drag-editable
+/// three ways, like an event in a calendar day view: drag the top edge to
+/// move `start`, the bottom edge to move `end`, or the middle to move the
+/// whole block (preserving its duration). Too-short blocks (under ~16pt)
+/// skip the edge handles and are move-only, since there's no room to grab
+/// a distinct top/bottom strip.
+private struct MeetingBlockView: View {
+    let meeting: MeetingBlock
+    let chartHeight: CGFloat
+    let barWidth: CGFloat
+    let dayStart: Date
+    let dayEnd: Date
+    let onChange: (Date, Date) -> Void
+
+    private enum DragMode {
+        case moveWhole, resizeTop, resizeBottom
+    }
+
+    @State private var dragMode: DragMode?
+    @State private var dragPointsDelta: CGFloat = 0
+
+    private static let edgeHandleHeight: CGFloat = 6
+    private static let splitThreshold: CGFloat = 16
+    private static let minBlockHeight: CGFloat = 6
+
+    private var secondsPerPoint: Double {
+        ChartScale.secondsPerPoint(chartHeight: chartHeight)
+    }
+
+    private var displayedStart: Date {
+        guard dragMode == .resizeTop || dragMode == .moveWhole else { return meeting.start }
+        let candidate = meeting.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        return min(max(candidate, dayStart), dayEnd)
+    }
+
+    private var displayedEnd: Date {
+        guard dragMode == .resizeBottom || dragMode == .moveWhole else { return meeting.end }
+        let candidate = meeting.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        return min(max(candidate, dayStart), dayEnd)
+    }
+
+    var body: some View {
+        let topOffset = CGFloat(ChartScale.fraction(of: displayedStart)) * chartHeight
+        let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd)) * chartHeight
+        let height = max(bottomOffset - topOffset, Self.minBlockHeight)
+        let canSplitHandles = height >= Self.splitThreshold
+
+        ZStack(alignment: .top) {
+            Capsule()
+                .fill(Color.yellow)
+                .frame(width: barWidth, height: height)
+
+            if canSplitHandles {
+                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight)
+                dragHandle(mode: .moveWhole, height: height - 2 * Self.edgeHandleHeight)
+                    .offset(y: Self.edgeHandleHeight)
+                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight)
+                    .offset(y: height - Self.edgeHandleHeight)
+            } else {
+                dragHandle(mode: .moveWhole, height: height)
+            }
+        }
+        .frame(width: barWidth, height: height, alignment: .top)
+        .offset(y: topOffset)
+    }
+
+    private func dragHandle(mode: DragMode, height: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: max(height, 1))
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        dragMode = mode
+                        dragPointsDelta = value.translation.height
+                    }
+                    .onEnded { value in
+                        let delta = Double(value.translation.height) * secondsPerPoint
+                        var finalStart = meeting.start
+                        var finalEnd = meeting.end
+                        switch mode {
+                        case .moveWhole:
+                            finalStart = meeting.start.addingTimeInterval(delta)
+                            finalEnd = meeting.end.addingTimeInterval(delta)
+                        case .resizeTop:
+                            finalStart = meeting.start.addingTimeInterval(delta)
+                        case .resizeBottom:
+                            finalEnd = meeting.end.addingTimeInterval(delta)
+                        }
+                        finalStart = min(max(finalStart, dayStart), dayEnd)
+                        finalEnd = min(max(finalEnd, dayStart), dayEnd)
+
+                        dragMode = nil
+                        dragPointsDelta = 0
+
+                        let snappedStart = snap(finalStart)
+                        let snappedEnd = snap(finalEnd)
+                        if snappedStart < snappedEnd {
+                            onChange(snappedStart, snappedEnd)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering {
+                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            #endif
+    }
+
+    /// Rounds to the nearest 5 minutes.
+    private func snap(_ date: Date) -> Date {
+        let interval: TimeInterval = 5 * 60
+        let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
+        return Date(timeIntervalSinceReferenceDate: rounded)
     }
 }
