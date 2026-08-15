@@ -228,6 +228,14 @@ final class WorkHistoryViewModel: ObservableObject {
         )
     }
 
+    /// Hours worked this week subtracted from the 40-hour weekly target.
+    /// Positive means hours remain; negative means already over budget.
+    func remainingWeeklyHours() -> Double {
+        let week = currentWeekDays()
+        let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
+        return WorkloadRecommender.weeklyTargetHours - worked
+    }
+
     /// Meeting percentage (0–100) across a set of days, or nil when no
     /// calendar data is available for any day with hours.
     func meetingPercentage(for days: [Date]) -> Double? {
