@@ -18,7 +18,9 @@ struct DailyBarChartView: View {
 
     static let minimumHeight: CGFloat = 220
     private static let labelHeight: CGFloat = 44
-    private static let weekHeaderHeight: CGFloat = 32
+    // Fits three stacked lines in the header: avg hours/day, meeting %, and
+    // the late-nights/drift/weekend narrative.
+    private static let weekHeaderHeight: CGFloat = 44
     private static let yAxisWidth: CGFloat = 36
     private static let yAxisHours: [Double] = [6, 9, 12, 15, 18, 21]
     private static let barWidth: CGFloat = 10
@@ -38,6 +40,31 @@ struct DailyBarChartView: View {
     /// Splits `days` into 7-day weeks for the per-week average header.
     private var weeks: [ArraySlice<Date>] {
         stride(from: 0, to: days.count, by: 7).map { days[$0..<min($0 + 7, days.count)] }
+    }
+
+    /// Returns the span slice that corresponds to a given week slice of `days`.
+    private func weekSpans(for week: ArraySlice<Date>) -> ArraySlice<WorkdaySpan?> {
+        let start = week.startIndex
+        let end = min(start + week.count, spans.count)
+        guard start < spans.count else { return spans[spans.endIndex..<spans.endIndex] }
+        return spans[start..<end]
+    }
+
+    /// Per-week narrative strings (late nights, drift, weekend work). Drift
+    /// is measured relative to the preceding week's median start time.
+    private var weekNarratives: [String?] {
+        let allWeeks = weeks
+        // Pre-compute each week's span slice and median in one pass so we
+        // don't recompute the previous week's median on every iteration.
+        let spansPerWeek = allWeeks.map { Array(weekSpans(for: $0)) }
+        let mediansPerWeek = spansPerWeek.map { WeeklyInsights.medianStartHour(spans: $0) }
+        return allWeeks.indices.map { i in
+            WeeklyInsights.narrative(
+                days: Array(allWeeks[i]),
+                spans: spansPerWeek[i],
+                previousMedianStart: i > 0 ? mediansPerWeek[i - 1] : nil
+            )
+        }
     }
 
     var body: some View {
@@ -71,7 +98,7 @@ struct DailyBarChartView: View {
         HStack(spacing: 6) {
             Spacer().frame(width: Self.yAxisWidth)
             HStack(spacing: Self.columnSpacing) {
-                ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                ForEach(Array(weeks.enumerated()), id: \.offset) { i, week in
                     VStack(spacing: 1) {
                         Text("Avg \(Int(averageHours(week).rounded(.up)))h/day")
                             .font(.system(size: 10, weight: .medium))
@@ -80,6 +107,13 @@ struct DailyBarChartView: View {
                             Text("\(Int(pct.rounded()))% meetings")
                                 .font(.system(size: 9, weight: .regular))
                                 .foregroundColor(.orange.opacity(0.9))
+                        }
+                        if let note = weekNarratives[i] {
+                            Text(note)
+                                .font(.system(size: 9, weight: .regular))
+                                .foregroundColor(.orange)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
