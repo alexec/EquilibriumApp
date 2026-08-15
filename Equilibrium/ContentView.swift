@@ -30,12 +30,20 @@ struct ContentView: View {
                 averageHours: { viewModel.averageHours(for: Array($0)) },
                 meetingPercentage: { viewModel.meetingPercentage(for: Array($0)) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
+                rollingAverageHoursPerDay: viewModel.rollingAverageHoursPerDay(),
                 onSave: { day, start, end, breakMinutes in
                     viewModel.setManualHours(for: day, start: start, end: end, breakMinutes: breakMinutes)
                 },
                 onClear: { day in viewModel.clearManualHours(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
+
+            if let insight = viewModel.rollingAverageInsight {
+                Text(insight)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

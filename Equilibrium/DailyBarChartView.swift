@@ -10,6 +10,8 @@ struct DailyBarChartView: View {
     let averageHours: (ArraySlice<Date>) -> Double
     let meetingPercentage: (ArraySlice<Date>) -> Double?
     let recommendedHours: (Date) -> Double?
+    /// Rolling 8-week average hours per weekday; used to draw the baseline overlay.
+    let rollingAverageHoursPerDay: Double
     let onSave: (Date, Date, Date, Int) -> Void
     let onClear: (Date) -> Void
     let onDelete: (Date) -> Void
@@ -123,11 +125,32 @@ struct DailyBarChartView: View {
     }
 
     private func dayColumns(chartHeight: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: Self.columnSpacing) {
-            ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                dayColumn(day: day, index: index, chartHeight: chartHeight)
+        ZStack(alignment: .top) {
+            HStack(alignment: .top, spacing: Self.columnSpacing) {
+                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                    dayColumn(day: day, index: index, chartHeight: chartHeight)
+                }
+            }
+            if rollingAverageHoursPerDay > 0 {
+                rollingAverageOverlay(chartHeight: chartHeight)
             }
         }
+    }
+
+    /// A dashed horizontal rule at the y-position that corresponds to
+    /// working `rollingAverageHoursPerDay` hours starting at 9am.
+    private func rollingAverageOverlay(chartHeight: CGFloat) -> some View {
+        let endHour = (ChartScale.workdayStartHour + rollingAverageHoursPerDay)
+            .clamped(to: ChartScale.startHour...ChartScale.endHour)
+        let yOffset = CGFloat(ChartScale.fraction(of: endHour)) * chartHeight
+        return GeometryReader { _ in
+            Rectangle()
+                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                .foregroundColor(Color.accentColor.opacity(0.65))
+                .frame(height: 1.5)
+                .offset(y: yOffset)
+        }
+        .allowsHitTesting(false)
     }
 
     private func dayColumn(day: Date, index: Int, chartHeight: CGFloat) -> some View {

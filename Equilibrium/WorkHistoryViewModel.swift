@@ -216,6 +216,44 @@ final class WorkHistoryViewModel: ObservableObject {
         return total / Double(weekdaysWithData)
     }
 
+    /// Rolling mean of effective hours/weekday over the most recent `weeks`
+    /// complete weeks (excluding the current, in-progress week). Only
+    /// weekdays that have any recorded data are included in the denominator,
+    /// so sparse history doesn't artificially deflate the average.
+    func rollingAverageHoursPerDay(weeks: Int = 8) -> Double {
+        // Current week days are excluded so the baseline is not influenced
+        // by the week the user is comparing against.
+        let currentWeek = Set(currentWeekDays().map { dayKey(for: $0) })
+        let windowDays = rollingWindowDays(weeks: weeks)
+            .filter { !currentWeek.contains(dayKey(for: $0)) }
+        return averageHours(for: windowDays)
+    }
+
+    /// A one-line insight comparing this week's total against the 8-week
+    /// rolling average, e.g. "This week: 43h — 12% above your 8-week avg."
+    /// Returns nil when there is not enough history to produce a meaningful
+    /// comparison (baseline average is zero).
+    var rollingAverageInsight: String? {
+        let weekDays = currentWeekDays()
+        let thisWeekTotal = weekDays.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
+
+        // Only weekdays with data contribute to the denominator.
+        let weekdaysWithData = weekDays.filter { day in
+            guard let s = span(for: day), s.hours > 0 else { return false }
+            return !WeekCalendar.isWeekend(day, calendar: calendar)
+        }.count
+        guard weekdaysWithData > 0 else { return nil }
+
+        let baseline = rollingAverageHoursPerDay(weeks: 8)
+        guard baseline > 0 else { return nil }
+
+        // Express this week in weekly hours by scaling the per-day average.
+        let baselineWeekly = baseline * 5
+        let diff = ((thisWeekTotal - baselineWeekly) / baselineWeekly * 100).rounded()
+        let sign = diff >= 0 ? "+" : ""
+        return "This week: \(Int(thisWeekTotal.rounded(.up)))h — \(sign)\(Int(diff))% vs your 8-week avg (\(Int(baselineWeekly.rounded()))h)"
+    }
+
     /// Recommended hours to work on `date` toward a 40-hour week, or nil if
     /// `date` isn't a remaining, unworked weekday in the current week.
     func recommendedHours(for date: Date) -> Double? {
