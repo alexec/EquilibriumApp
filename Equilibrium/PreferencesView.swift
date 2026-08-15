@@ -1,16 +1,18 @@
 import SwiftUI
 
-/// Lets the user configure their work schedule either by typing a free-text
-/// description (parsed into structured values by the on-device LLM) or by
-/// adjusting the fields directly — the latter always works, even when
-/// Foundation Models is unavailable, since it's the only way to set
-/// preferences on a Mac without Apple Intelligence.
+/// Lets the user configure their work schedule by describing it in free
+/// text (parsed into structured values by the on-device LLM). No Stepper
+/// form — the result is shown back as a plain-English sentence generated
+/// from the settings (`WorkPreferences.summarySentence`), which stays
+/// hidden until there's something to show: either a prior saved
+/// configuration, or a fresh one you've just generated.
 struct PreferencesView: View {
     let current: WorkPreferences
     let onSave: (WorkPreferences) -> Void
 
     @State private var freeText: String = ""
     @State private var draft: WorkPreferences
+    @State private var hasResult: Bool
     @State private var isGenerating = false
     @State private var generationFailed = false
 
@@ -20,6 +22,9 @@ struct PreferencesView: View {
         self.current = current
         self.onSave = onSave
         _draft = State(initialValue: current)
+        // Only show a result up front if there's already a real, previously
+        // configured (or generated) preference — not just the defaults.
+        _hasResult = State(initialValue: current != .default)
     }
 
     var body: some View {
@@ -30,25 +35,29 @@ struct PreferencesView: View {
             if WorkPreferencesGenerator.isAvailable {
                 describeYourWeekSection
             } else {
-                Text("On-device AI isn't available on this Mac, so set these directly below.")
+                Text("On-device AI isn't available on this Mac, so preferences can't be configured here yet.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
 
-            Divider()
+            if hasResult {
+                Divider()
+                Text(draft.summarySentence)
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            manualFieldsSection
-
-            HStack {
-                Spacer()
-                Button("Save") {
-                    onSave(draft)
+                HStack {
+                    Spacer()
+                    Button("Save") {
+                        onSave(draft)
+                    }
+                    .keyboardShortcut(.defaultAction)
                 }
-                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)
-        .frame(width: 320)
+        .frame(width: 300)
     }
 
     private var describeYourWeekSection: some View {
@@ -77,7 +86,7 @@ struct PreferencesView: View {
 
             HStack {
                 if generationFailed {
-                    Text("Couldn't understand that — try rephrasing, or set the fields below directly.")
+                    Text("Couldn't understand that — try rephrasing.")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
@@ -97,72 +106,6 @@ struct PreferencesView: View {
         }
     }
 
-    private var manualFieldsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Stepper(
-                "Weekly target: \(HoursFormat.string(draft.weeklyTargetHours))",
-                value: $draft.weeklyTargetHours,
-                in: 5...80,
-                step: 1
-            )
-            Stepper(
-                "Workday start: \(hourLabel(draft.workdayStartHour))",
-                value: $draft.workdayStartHour,
-                in: 0...(draft.workdayEndHour - 1),
-                step: 1
-            )
-            Stepper(
-                "Workday end: \(hourLabel(draft.workdayEndHour))",
-                value: $draft.workdayEndHour,
-                in: (draft.workdayStartHour + 1)...24,
-                step: 1
-            )
-
-            optionalHoursStepper(
-                label: "Meetings/day target",
-                value: $draft.targetMeetingHoursPerDay
-            )
-            optionalHoursStepper(
-                label: "Focus/day target",
-                value: $draft.targetFocusHoursPerDay
-            )
-        }
-        .font(.system(size: 12))
-    }
-
-    /// A Stepper for an optional hours/day value, with a toggle to
-    /// enable/disable it entirely (nil = "no target set").
-    private func optionalHoursStepper(label: String, value: Binding<Double?>) -> some View {
-        HStack {
-            Toggle(isOn: Binding(
-                get: { value.wrappedValue != nil },
-                set: { enabled in value.wrappedValue = enabled ? (value.wrappedValue ?? 2) : nil }
-            )) {
-                EmptyView()
-            }
-            .toggleStyle(.checkbox)
-            .labelsHidden()
-
-            if let bound = value.wrappedValue {
-                Stepper(
-                    "\(label): \(HoursFormat.string(bound))",
-                    value: Binding(get: { bound }, set: { value.wrappedValue = $0 }),
-                    in: 0...16,
-                    step: 0.5
-                )
-            } else {
-                Text("\(label): not set")
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private func hourLabel(_ hour: Double) -> String {
-        let period = hour < 12 || hour == 24 ? "am" : "pm"
-        let displayHour = hour == 0 || hour == 24 ? 12 : (hour > 12 ? hour - 12 : hour)
-        return "\(Int(displayHour))\(period)"
-    }
-
     private func generate() {
         guard #available(macOS 26.0, *) else { return }
         isGenerating = true
@@ -173,6 +116,7 @@ struct PreferencesView: View {
             isGenerating = false
             if let parsed {
                 draft = parsed
+                hasResult = true
             } else {
                 generationFailed = true
             }

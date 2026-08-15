@@ -18,6 +18,30 @@ struct WorkPreferences: Codable, Equatable {
     var targetFocusHoursPerDay: Double?
 
     static let `default` = WorkPreferences()
+
+    /// A plain-English sentence describing these settings, generated from
+    /// the struct's fields — this is what `PreferencesView` shows in place
+    /// of a form of Steppers, mirroring the free-text description that
+    /// produced it (or that it defaults to before you've described one).
+    var summarySentence: String {
+        var parts = [
+            "\(HoursFormat.string(weeklyTargetHours))/week",
+            "\(Self.clockLabel(workdayStartHour))–\(Self.clockLabel(workdayEndHour))",
+        ]
+        if let targetMeetingHoursPerDay {
+            parts.append("\(HoursFormat.string(targetMeetingHoursPerDay)) meetings/day")
+        }
+        if let targetFocusHoursPerDay {
+            parts.append("\(HoursFormat.string(targetFocusHoursPerDay)) focus/day")
+        }
+        return parts.joined(separator: ", ") + "."
+    }
+
+    private static func clockLabel(_ hour: Double) -> String {
+        let period = hour < 12 || hour == 24 ? "am" : "pm"
+        let displayHour = hour == 0 || hour == 24 ? 12 : (hour > 12 ? hour - 12 : hour)
+        return "\(Int(displayHour))\(period)"
+    }
 }
 
 /// Persists `WorkPreferences` as a single JSON blob in UserDefaults —
