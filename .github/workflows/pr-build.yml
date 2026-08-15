@@ -1,0 +1,29 @@
+name: PR Build
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app
+        run: |
+          xcodebuild \
+            -project Equilibrium.xcodeproj \
+            -scheme Equilibrium \
+            -configuration Debug \
+            -destination "platform=macOS" \
+            build
