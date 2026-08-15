@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var viewModel = WorkHistoryViewModel()
+    @ObservedObject var viewModel: WorkHistoryViewModel
     @State private var showsAbout = false
 
     var body: some View {
@@ -28,6 +28,7 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 averageHours: { viewModel.averageHours(for: Array($0)) },
+                meetingPercentage: { viewModel.meetingPercentage(for: Array($0)) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
                 rollingAverageHoursPerDay: viewModel.rollingAverageHoursPerDay(),
                 onSave: { day, start, end, breakMinutes in
@@ -48,7 +49,9 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
-            viewModel.refresh()
+            Task {
+                await viewModel.requestCalendarAccessAndRefresh()
+            }
             viewModel.startAutoRefresh()
         }
         .onDisappear {
