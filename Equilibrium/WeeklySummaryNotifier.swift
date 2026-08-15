@@ -29,8 +29,7 @@ enum WeeklySummaryNotifier {
         guard defaults.string(forKey: lastFiredWeekKey) != currentISOWeek else { return }
 
         let message = buildMessage(store: store, calendar: calendar, today: today)
-        scheduleNotification(body: message)
-        defaults.set(currentISOWeek, forKey: lastFiredWeekKey)
+        scheduleNotification(body: message, weekKey: currentISOWeek, defaults: defaults)
     }
 
     // MARK: - Internal helpers (internal for testability)
@@ -79,15 +78,16 @@ enum WeeklySummaryNotifier {
         iso.locale = Locale(identifier: "en_US_POSIX")
         let week = iso.component(.weekOfYear, from: date)
         let year = iso.component(.yearForWeekOfYear, from: date)
-        return "\(year)-W\(week)"
+        return String(format: "%04d-W%02d", year, week)
     }
 
     /// The five weekdays (Mon–Fri) of the previous calendar week.
     private static func lastWeekWeekdays(today: Date, calendar: Calendar) -> [Date] {
         let monday = calendar.startOfDay(for: today)
-        return (1...5).compactMap { offset in
+        // Offsets from this Monday to last week's Mon–Fri: -7, -6, -5, -4, -3
+        return (3...7).reversed().compactMap { offset in
             calendar.date(byAdding: .day, value: -offset, to: monday)
-        }.reversed()
+        }
     }
 
     private static func dayKey(for date: Date, calendar: Calendar) -> String {
@@ -124,7 +124,7 @@ enum WeeklySummaryNotifier {
         return abbr.string(from: date)
     }
 
-    private static func scheduleNotification(body: String) {
+    private static func scheduleNotification(body: String, weekKey: String, defaults: UserDefaults) {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert]) { granted, _ in
             guard granted else { return }
@@ -136,7 +136,10 @@ enum WeeklySummaryNotifier {
                 content: content,
                 trigger: nil
             )
-            center.add(request, withCompletionHandler: nil)
+            center.add(request) { error in
+                guard error == nil else { return }
+                defaults.set(weekKey, forKey: lastFiredWeekKey)
+            }
         }
     }
 }
