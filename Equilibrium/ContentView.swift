@@ -28,6 +28,7 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 averageHours: { viewModel.averageHours(for: Array($0)) },
+                meetingPercentage: { viewModel.meetingPercentage(for: Array($0)) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
                 onSave: { day, start, end, breakMinutes in
                     viewModel.setManualHours(for: day, start: start, end: end, breakMinutes: breakMinutes)
@@ -40,7 +41,9 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
-            viewModel.refresh()
+            Task {
+                await viewModel.requestCalendarAccessAndRefresh()
+            }
             viewModel.startAutoRefresh()
         }
         .onDisappear {
