@@ -83,8 +83,10 @@ enum WeeklyInsightGenerator {
             breakdown, write ONE short sentence (max ~16 words) starting with \
             "You worked" that summarizes the week's shape — mention the meeting/ \
             focus balance only if both are given below. Never invent numbers that \
-            weren't given to you. No markdown, no emoji, no exclamation marks, no \
-            preamble like "Here's" — just the sentence itself.
+            weren't given to you. When a duration is a half hour, write it with \
+            the ½ symbol (e.g. "3½h"), never "3.5h" or "three and a half hours". \
+            No markdown, no emoji, no exclamation marks, no preamble like \
+            "Here's" — just the sentence itself.
             """
         })
 
