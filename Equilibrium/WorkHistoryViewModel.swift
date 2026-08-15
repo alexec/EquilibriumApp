@@ -5,7 +5,6 @@ import Combine
 final class WorkHistoryViewModel: ObservableObject {
     @Published var spansByDay: [String: WorkdaySpan] = [:]
     @Published var isLoading = false
-    @Published var weeklyInsight: String?
     @Published var calendarAccessGranted: Bool = false
     /// LLM-generated "You worked ..." caption per week, keyed by that
     /// week's first day (`dayKey`). Falls back to a deterministic sentence
@@ -34,13 +33,6 @@ final class WorkHistoryViewModel: ObservableObject {
     private let dayKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-        return formatter
-    }()
-
-    private let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE"
         formatter.timeZone = .current
         return formatter
     }()
@@ -95,7 +87,6 @@ final class WorkHistoryViewModel: ObservableObject {
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store)
-                self.refreshInsight()
                 self.refreshWeekHeaderSummaries()
             }
 
@@ -103,37 +94,6 @@ final class WorkHistoryViewModel: ObservableObject {
             if granted {
                 await self.refreshMeetingData()
             }
-        }
-    }
-
-    /// Regenerates the on-device natural-language weekly insight from the
-    /// current week's spans. Silently does nothing if Foundation Models
-    /// isn't available (older macOS, or Apple Intelligence not enabled) —
-    /// this is a nice-to-have, never a blocking or errorful feature.
-    func refreshInsight() {
-        guard WeeklyInsightGenerator.isAvailable else {
-            weeklyInsight = nil
-            return
-        }
-        guard #available(macOS 26.0, *) else { return }
-
-        let week = currentWeekDays()
-        let today = calendar.startOfDay(for: Date())
-        let daysWorked: [(weekday: String, hours: Double)] = week.compactMap { day in
-            guard day <= today, let hours = span(for: day)?.effectiveHours, hours > 0 else { return nil }
-            return (weekdayFormatter.string(from: day), hours)
-        }
-        let workedSoFar = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-        let summary = WeeklyInsightGenerator.WeekSummary(
-            todayWeekday: weekdayFormatter.string(from: today),
-            daysWorked: daysWorked,
-            workedSoFarHours: workedSoFar,
-            targetHours: WorkloadRecommender.weeklyTargetHours,
-            todaysRecommendedHours: recommendedHours(for: today)
-        )
-
-        Task {
-            weeklyInsight = await WeeklyInsightGenerator.generateInsight(for: summary)
         }
     }
 
@@ -259,7 +219,7 @@ final class WorkHistoryViewModel: ObservableObject {
     func deleteHours(for date: Date) {
         let span = WorkdaySpan(dayKey: dayKey(for: date), start: date, end: date, isManual: true)
         spansByDay = store.setManualSpan(span)
-        refreshInsight()
+        refreshWeekHeaderSummaries()
     }
 
     /// Sets a manual meeting/focus split for a day — from dragging the
