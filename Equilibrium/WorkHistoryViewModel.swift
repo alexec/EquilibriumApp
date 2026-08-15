@@ -85,6 +85,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 let yesterday = self.dayKey(for: self.calendar.date(byAdding: .day, value: -1, to: Date())!)
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
+                WeeklySummaryNotifier.fireIfNeeded(store: self.store)
                 self.refreshInsight()
             }
 
