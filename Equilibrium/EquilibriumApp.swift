@@ -2,14 +2,41 @@ import SwiftUI
 
 @main
 struct EquilibriumApp: App {
+    @StateObject private var viewModel = WorkHistoryViewModel()
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        WindowGroup(id: "main") {
+            ContentView(viewModel: viewModel)
                 .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 480, maxHeight: 480)
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+
+        MenuBarExtra {
+            MenuBarStatusView(viewModel: viewModel)
+        } label: {
+            MenuBarLabel(viewModel: viewModel)
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+/// The compact label shown in the menu bar: today's hours / remaining budget.
+private struct MenuBarLabel: View {
+    @ObservedObject var viewModel: WorkHistoryViewModel
+
+    var body: some View {
+        let today = viewModel.span(for: Date())?.effectiveHours ?? 0
+        let remaining = viewModel.remainingWeeklyHours()
+
+        let todayText = String(format: "%.1fh", today)
+        let remainingText = remaining >= 0
+            ? String(format: "%.1fh left", remaining)
+            : String(format: "+%.1fh", -remaining)
+
+        Text("\(todayText)  \(remainingText)")
+            .font(.system(size: 12, weight: .medium, design: .rounded))
     }
 }
 
