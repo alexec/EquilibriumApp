@@ -6,11 +6,15 @@ import SwiftUI
 /// from the settings (`WorkPreferences.summarySentence`), which stays
 /// hidden until there's something to show: either a prior saved
 /// configuration, or a fresh one you've just generated.
+///
+/// The text box starts pre-filled with an example sentence rather than a
+/// non-interactive placeholder — it's real, editable content from the
+/// start, so there's something concrete to tweak instead of a blank box.
 struct PreferencesView: View {
     let current: WorkPreferences
     let onSave: (WorkPreferences) -> Void
 
-    @State private var freeText: String = ""
+    @State private var freeText: String
     @State private var draft: WorkPreferences
     @State private var hasResult: Bool
     @State private var isGenerating = false
@@ -22,6 +26,7 @@ struct PreferencesView: View {
         self.current = current
         self.onSave = onSave
         _draft = State(initialValue: current)
+        _freeText = State(initialValue: Self.examplePrompt)
         // Only show a result up front if there's already a real, previously
         // configured (or generated) preference — not just the defaults.
         _hasResult = State(initialValue: current != .default)
@@ -65,24 +70,21 @@ struct PreferencesView: View {
             Text("Describe your ideal week")
                 .font(.system(size: 12, weight: .medium))
 
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $freeText)
-                    .font(.system(size: 12))
-                    .frame(height: 60)
-                    .padding(4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.primary.opacity(0.05))
-                    )
-                if freeText.isEmpty {
-                    Text(Self.examplePrompt)
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 12)
-                        .allowsHitTesting(false)
+            // A single-line field rather than TextEditor: this is meant to
+            // be one short sentence, and only TextField supports Enter
+            // submitting (via onSubmit) — TextEditor treats Return as a
+            // newline, with no way to hook Enter into generating instead.
+            TextField("", text: $freeText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.05))
+                )
+                .onSubmit {
+                    generate()
                 }
-            }
 
             HStack {
                 if generationFailed {
