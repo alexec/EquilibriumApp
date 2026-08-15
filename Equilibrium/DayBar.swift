@@ -145,6 +145,8 @@ struct DayBar: View {
         }()
         let focusHeight = max(workedHeight - meetingHeight, 0)
 
+        let isOver8h = span.roundedUpHours > 8
+
         ZStack(alignment: .top) {
             if focusHeight > 0 {
                 Capsule()
@@ -163,41 +165,59 @@ struct DayBar: View {
                     .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
                     .offset(y: focusHeight + meetingHeight)
             }
-
-            // Invisible, wider drag handle centered on the focus/meeting
-            // boundary — only present when there's a split to adjust.
-            if span.meetingFraction != nil, workedHeight > 0 {
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: barWidth + 20, height: 14)
-                    .contentShape(Rectangle())
-                    .offset(y: focusHeight - 7)
-                    .gesture(
-                        DragGesture(minimumDistance: 2)
-                            .onChanged { value in
-                                isDragging = true
-                                dragTranslation = value.translation.height
-                            }
-                            .onEnded { value in
-                                let effectiveMinutes = Int(span.effectiveHours * 60.0)
-                                let finalMeetingHeight = min(max(baseMeetingHeight - value.translation.height, 0), workedHeight)
-                                let finalFraction = workedHeight > 0 ? Double(finalMeetingHeight / workedHeight) : 0
-                                // Snap to the nearest 5 minutes.
-                                let rawMinutes = Int((finalFraction * Double(effectiveMinutes)).rounded())
-                                let snapped = (rawMinutes / 5) * 5
-                                isDragging = false
-                                dragTranslation = 0
-                                onMeetingSplitChange(snapped)
-                            }
-                    )
-                    #if os(macOS)
-                    .onHover { hovering in
-                        if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-                    }
-                    #endif
-            }
         }
         .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
+        // A red outline around the whole stack signals >8h without giving
+        // up the segment fill colors to a 4th "over budget" color.
+        .overlay(
+            Group {
+                if isOver8h {
+                    Capsule()
+                        .stroke(Color.red, lineWidth: 1.5)
+                        .frame(width: barWidth, height: max(barHeight, barWidth))
+                }
+            }
+        )
+        .overlay(
+            // Invisible, wide drag surface covering the whole bar — not just
+            // a thin strip on the boundary — so a drag started anywhere on
+            // the visible capsules is captured by this gesture rather than
+            // falling through to the window's isMovableByWindowBackground,
+            // which otherwise wins the mouseDown and drags the whole window.
+            // minimumDistance: 0 claims the touch immediately for the same
+            // reason: any delay lets the window-drag get there first.
+            Group {
+                if span.meetingFraction != nil, workedHeight > 0 {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: barWidth + 20, height: max(barHeight, barWidth))
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    isDragging = true
+                                    dragTranslation = value.translation.height
+                                }
+                                .onEnded { value in
+                                    let effectiveMinutes = Int(span.effectiveHours * 60.0)
+                                    let finalMeetingHeight = min(max(baseMeetingHeight - value.translation.height, 0), workedHeight)
+                                    let finalFraction = workedHeight > 0 ? Double(finalMeetingHeight / workedHeight) : 0
+                                    // Snap to the nearest 5 minutes.
+                                    let rawMinutes = Int((finalFraction * Double(effectiveMinutes)).rounded())
+                                    let snapped = (rawMinutes / 5) * 5
+                                    isDragging = false
+                                    dragTranslation = 0
+                                    onMeetingSplitChange(snapped)
+                                }
+                        )
+                        #if os(macOS)
+                        .onHover { hovering in
+                            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                        }
+                        #endif
+                }
+            }
+        )
         .offset(y: topOffset)
     }
 }

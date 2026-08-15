@@ -24,13 +24,6 @@ struct ContentView: View {
                 }
             }
 
-            if let insight = viewModel.weeklyInsight {
-                Text(insight)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
             DailyBarChartView(
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
