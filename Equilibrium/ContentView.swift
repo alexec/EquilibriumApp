@@ -33,6 +33,7 @@ struct ContentView: View {
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
                 workdayStartHour: viewModel.preferences.workdayStartHour,
                 workdayEndHour: viewModel.preferences.workdayEndHour,
+                weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
                 onMeetingChange: { day, meetingID, newStart, newEnd in
                     viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)

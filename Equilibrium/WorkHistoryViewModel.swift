@@ -117,7 +117,10 @@ final class WorkHistoryViewModel: ObservableObject {
             guard let first = week.first else { continue }
             let key = dayKey(for: first)
 
-            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: week.map { span(for: $0) }) else {
+            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(
+                from: week.map { span(for: $0) },
+                weeklyTargetHours: preferences.weeklyTargetHours
+            ) else {
                 lastWeekHeaderStats[key] = nil
                 weekHeaderSummaries[key] = nil
                 continue

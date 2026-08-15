@@ -13,6 +13,9 @@ struct DailyBarChartView: View {
     /// to each day's `DayBar` for its "normal workday" track.
     let workdayStartHour: Double
     let workdayEndHour: Double
+    /// The configured weekly target (from `WorkPreferences`), used only for
+    /// the fallback week-header sentence's target comparison basis.
+    let weeklyTargetHours: Double
     /// LLM-generated "You worked ..." caption for the week starting on the
     /// given date, or nil if unavailable/not generated yet — in which case
     /// the deterministic `WeekHeaderStats.fallbackSentence` is shown instead.
@@ -61,7 +64,7 @@ struct DailyBarChartView: View {
     /// built from the same `WeekHeaderStats`. Nil when the week has no
     /// data at all yet.
     private func weekHeaderLine(weekStart: Date, spans: [WorkdaySpan?]) -> String? {
-        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: spans) else { return nil }
+        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: spans, weeklyTargetHours: weeklyTargetHours) else { return nil }
         return aiWeekSummary(weekStart) ?? stats.fallbackSentence
     }
 

@@ -29,12 +29,18 @@ enum WeeklyInsightGenerator {
         let workAvgHours: Double
         let breakAvgHours: Double
         let meetingAvgHours: Double?
+        /// The configured weekly target expressed as an hours/weekday rate
+        /// (weeklyTargetHours / 5), so it's directly comparable to
+        /// `workAvgHours` regardless of how many days this week have data
+        /// so far — a strict weekly-total comparison would read as "under"
+        /// for any week that isn't finished yet.
+        let targetHoursPerDay: Double
 
         /// Averages effective/break/meeting hours per weekday across
         /// whichever days in `spans` have any recorded data. Meeting only
         /// averages over days with calendar data; nil when no day in the
         /// week has any. Returns nil when no day has any data at all.
-        static func compute(from spans: [WorkdaySpan?]) -> WeekHeaderStats? {
+        static func compute(from spans: [WorkdaySpan?], weeklyTargetHours: Double) -> WeekHeaderStats? {
             let daysWithData = spans.compactMap { $0 }.filter { $0.hours > 0 }
             guard !daysWithData.isEmpty else { return nil }
 
@@ -45,7 +51,12 @@ enum WeeklyInsightGenerator {
             let meetingAvg = daysWithMeetingData.isEmpty ? nil :
                 daysWithMeetingData.reduce(0.0) { $0 + Double($1.meetingMinutes) / 60.0 } / Double(daysWithMeetingData.count)
 
-            return WeekHeaderStats(workAvgHours: workAvg, breakAvgHours: breakAvg, meetingAvgHours: meetingAvg)
+            return WeekHeaderStats(
+                workAvgHours: workAvg,
+                breakAvgHours: breakAvg,
+                meetingAvgHours: meetingAvg,
+                targetHoursPerDay: weeklyTargetHours / 5
+            )
         }
 
         /// The deterministic "Nh meetings/day, ..." sentence, used whenever
@@ -81,19 +92,26 @@ enum WeeklyInsightGenerator {
             You are a calm, plain-spoken assistant inside a personal work-hours \
             tracking app, writing a one-line caption that sits directly above a \
             small chart of one work week. Given that week's average-per-weekday \
-            breakdown, write ONE short sentence (max ~16 words) starting with \
-            "You worked" that summarizes the week's shape — mention meetings \
-            only if given below. Never invent numbers that weren't given to \
-            you. When a duration is a half hour, write it with the ½ symbol \
-            (e.g. "3½h"), never "3.5h" or "three and a half hours". No \
-            markdown, no emoji, no exclamation marks, no preamble like \
-            "Here's" — just the sentence itself.
+            work hours and their target, write ONE concise sentence (max ~16 \
+            words) starting with "You worked" whose main point is whether they \
+            worked OVER or UNDER their target — state it plainly (over by how \
+            much, under by how much, or right on target), not just a neutral \
+            recap. Mention meetings only if given below, and only in passing — \
+            the over/under comparison is what matters. Never invent numbers \
+            that weren't given to you. When a duration is a half hour, write \
+            it with the ½ symbol (e.g. "3½h"), never "3.5h" or "three and a \
+            half hours". No markdown, no emoji, no exclamation marks, no \
+            preamble like "Here's" — just the sentence itself.
             """
         })
 
         // Rounded to the nearest half hour before it ever reaches the model,
         // so it can't echo back noisy precision like "8.0" or "7.83".
-        var lines = ["Average per weekday this week:", "Work: \(HoursFormat.string(stats.workAvgHours))"]
+        var lines = [
+            "Average per weekday this week:",
+            "Work: \(HoursFormat.string(stats.workAvgHours))",
+            "Target: \(HoursFormat.string(stats.targetHoursPerDay))",
+        ]
         if let meeting = stats.meetingAvgHours {
             lines.append("Meetings: \(HoursFormat.string(meeting))")
         }

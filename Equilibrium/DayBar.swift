@@ -142,10 +142,11 @@ struct DayBar: View {
                 if showsHoursLabel {
                     let startFrac = ChartScale.fraction(of: hourFraction(span.start))
                     let topOffset = CGFloat(startFrac) * chartHeight
-                    let isOver = span.roundedUpHours > 8
+                    // No over-8h color signal for now, same as the outline
+                    // removed earlier — we'll come back to this.
                     Text(hoursLabel(span))
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(isOver ? .red : .secondary)
+                        .foregroundColor(.secondary)
                         .fixedSize()
                         .offset(y: topOffset - 13)
                 }
