@@ -25,9 +25,6 @@ private struct WindowChromeRemover: NSViewRepresentable {
             window.styleMask.insert(.resizable)
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
-            window.standardWindowButton(.closeButton)?.isHidden = true
-            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            window.standardWindowButton(.zoomButton)?.isHidden = true
             window.isMovableByWindowBackground = true
             window.isOpaque = false
             window.backgroundColor = .clear
