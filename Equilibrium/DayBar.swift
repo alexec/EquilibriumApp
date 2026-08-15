@@ -38,6 +38,10 @@ struct DayBar: View {
     let showsWorkdayTrack: Bool
     let showsHoursLabel: Bool
     let recommendedHours: Double?
+    /// The configured workday span (from `WorkPreferences`), used to
+    /// position the dashed "normal workday" track.
+    let workdayStartHour: Double
+    let workdayEndHour: Double
     /// Called with the new meeting-minute value while the focus/meeting
     /// boundary is being dragged, and again with the final value on release.
     var onMeetingSplitChange: (Int) -> Void = { _ in }
@@ -75,20 +79,21 @@ struct DayBar: View {
     }
 
     var body: some View {
-        let workdayTop = CGFloat(ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+        let workdayTop = CGFloat(ChartScale.fraction(of: workdayStartHour)) * chartHeight
         let isOverBudget = showsRecommendation && (recommendedHours ?? 0) < 0
 
-        // The workday track normally spans 9am-5pm, but when there's no real
-        // data yet and a recommendation exists, its height instead reflects
-        // the recommended hours (anchored at 9am), so the recommendation and
-        // "normal workday" indicator share one visual element. A negative
-        // recommendation (already over budget) has no positive height to draw.
+        // The workday track normally spans the configured workday, but when
+        // there's no real data yet and a recommendation exists, its height
+        // instead reflects the recommended hours (anchored at the
+        // configured start), so the recommendation and "normal workday"
+        // indicator share one visual element. A negative recommendation
+        // (already over budget) has no positive height to draw.
         let workdayHeight: CGFloat = {
             if showsRecommendation, let recommendedHours, recommendedHours > 0 {
-                let recEndHour = (ChartScale.workdayStartHour + recommendedHours).clamped(to: ChartScale.startHour...ChartScale.endHour)
-                return CGFloat(ChartScale.fraction(of: recEndHour) - ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+                let recEndHour = (workdayStartHour + recommendedHours).clamped(to: ChartScale.startHour...ChartScale.endHour)
+                return CGFloat(ChartScale.fraction(of: recEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
             }
-            return CGFloat(ChartScale.fraction(of: ChartScale.workdayEndHour) - ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+            return CGFloat(ChartScale.fraction(of: workdayEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
         }()
 
         ZStack(alignment: .top) {

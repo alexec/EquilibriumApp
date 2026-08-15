@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
     @State private var showsAbout = false
+    @State private var showsPreferences = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -12,6 +13,19 @@ struct ContentView: View {
                         .controlSize(.small)
                 }
                 Spacer()
+                Button {
+                    showsPreferences = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showsPreferences) {
+                    PreferencesView(current: viewModel.preferences) { updated in
+                        viewModel.updatePreferences(updated)
+                        showsPreferences = false
+                    }
+                }
                 Button {
                     showsAbout = true
                 } label: {
@@ -28,6 +42,8 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
+                workdayStartHour: viewModel.preferences.workdayStartHour,
+                workdayEndHour: viewModel.preferences.workdayEndHour,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
                 onMeetingSplitChange: { day, minutes in
                     viewModel.setMeetingSplit(for: day, meetingMinutes: minutes)

@@ -9,6 +9,10 @@ struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
+    /// The configured workday span (from `WorkPreferences`), passed through
+    /// to each day's `DayBar` for its "normal workday" track.
+    let workdayStartHour: Double
+    let workdayEndHour: Double
     /// LLM-generated "You worked ..." caption for the week starting on the
     /// given date, or nil if unavailable/not generated yet — in which case
     /// the deterministic `WeekHeaderStats.fallbackSentence` is shown instead.
@@ -131,6 +135,8 @@ struct DailyBarChartView: View {
                 showsWorkdayTrack: true,
                 showsHoursLabel: true,
                 recommendedHours: recommendedHours(day),
+                workdayStartHour: workdayStartHour,
+                workdayEndHour: workdayEndHour,
                 onMeetingSplitChange: { minutes in onMeetingSplitChange(day, minutes) }
             )
             Text(weekdayLabel(day))

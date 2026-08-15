@@ -11,6 +11,10 @@ final class WorkHistoryViewModel: ObservableObject {
     /// (see `WeeklyInsightGenerator.WeekHeaderStats.fallbackSentence`)
     /// wherever a key is missing — model unavailable, or not generated yet.
     @Published var weekHeaderSummaries: [String: String] = [:]
+    /// The user's configured work schedule — weekly target, workday span,
+    /// and (optionally) meeting/focus targets. Set manually or parsed from
+    /// free text via `WorkPreferencesGenerator`; see `PreferencesView`.
+    @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
 
     private let store = WorkHistoryStore()
     private let liveEventStore = LiveEventStore()
@@ -86,7 +90,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 let yesterday = self.dayKey(for: self.calendar.date(byAdding: .day, value: -1, to: Date())!)
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
-                WeeklySummaryNotifier.fireIfNeeded(store: self.store)
+                WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
                 self.refreshWeekHeaderSummaries()
             }
 
@@ -256,24 +260,32 @@ final class WorkHistoryViewModel: ObservableObject {
         WeekCalendar.currentWeekDays(calendar: calendar)
     }
 
-    /// Recommended hours to work on `date` toward a 40-hour week, or nil if
-    /// `date` isn't a remaining, unworked weekday in the current week.
+    /// Recommended hours to work on `date` toward the configured weekly
+    /// target, or nil if `date` isn't a remaining, unworked weekday in the
+    /// current week.
     func recommendedHours(for date: Date) -> Double? {
         WorkloadRecommender.recommendedHours(
             for: date,
             week: currentWeekDays(),
             today: calendar.startOfDay(for: Date()),
+            weeklyTargetHours: preferences.weeklyTargetHours,
             hoursWorked: { [weak self] day in self?.span(for: day)?.effectiveHours ?? 0 },
             calendar: calendar
         )
     }
 
-    /// Hours worked this week subtracted from the 40-hour weekly target.
+    /// Hours worked this week subtracted from the configured weekly target.
     /// Positive means hours remain; negative means already over budget.
     func remainingWeeklyHours() -> Double {
         let week = currentWeekDays()
         let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-        return WorkloadRecommender.weeklyTargetHours - worked
+        return preferences.weeklyTargetHours - worked
+    }
+
+    /// Updates and persists the user's work-schedule preferences.
+    func updatePreferences(_ new: WorkPreferences) {
+        preferences = new
+        WorkPreferencesStore.save(new)
     }
 }
 

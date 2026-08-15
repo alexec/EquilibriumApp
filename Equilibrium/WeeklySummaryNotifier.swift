@@ -4,8 +4,8 @@ import UserNotifications
 /// Fires a one-sentence Monday-morning digest notification once per ISO week:
 /// "Last week: 43h, 1 late night, longest day Tue 10.5h. Budget this week: 40h."
 ///
-/// Reuses `WorkloadRecommender.weeklyTargetHours` for the budget figure and
-/// guards against duplicate firing with a UserDefaults key.
+/// Takes `weeklyTargetHours` (from `WorkPreferences`) for the budget figure
+/// and guards against duplicate firing with a UserDefaults key.
 enum WeeklySummaryNotifier {
 
     /// Hours after which an end time is considered a "late night".
@@ -19,6 +19,7 @@ enum WeeklySummaryNotifier {
     /// notification if today is Monday and we haven't yet fired one this week.
     static func fireIfNeeded(
         store: WorkHistoryStore,
+        weeklyTargetHours: Double,
         calendar: Calendar = .current,
         today: Date = Date(),
         defaults: UserDefaults = .standard
@@ -28,7 +29,7 @@ enum WeeklySummaryNotifier {
         let currentISOWeek = isoWeekIdentifier(for: today, calendar: calendar)
         guard defaults.string(forKey: lastFiredWeekKey) != currentISOWeek else { return }
 
-        let message = buildMessage(store: store, calendar: calendar, today: today)
+        let message = buildMessage(store: store, weeklyTargetHours: weeklyTargetHours, calendar: calendar, today: today)
         scheduleNotification(body: message, weekKey: currentISOWeek, defaults: defaults)
     }
 
@@ -36,6 +37,7 @@ enum WeeklySummaryNotifier {
 
     static func buildMessage(
         store: WorkHistoryStore,
+        weeklyTargetHours: Double,
         calendar: Calendar = .current,
         today: Date = Date()
     ) -> String {
@@ -49,7 +51,7 @@ enum WeeklySummaryNotifier {
         let longestSpan = lastWeekSpans.max(by: { $0.effectiveHours < $1.effectiveHours })
 
         let totalStr = formatHours(totalHours)
-        let budgetStr = formatHours(WorkloadRecommender.weeklyTargetHours)
+        let budgetStr = formatHours(weeklyTargetHours)
 
         var parts: [String] = ["Last week: \(totalStr)"]
 
