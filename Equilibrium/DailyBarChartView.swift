@@ -9,6 +9,10 @@ struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
+    /// LLM-generated "You worked ..." caption for the week starting on the
+    /// given date, or nil if unavailable/not generated yet — in which case
+    /// the deterministic `WeekHeaderStats.fallbackSentence` is shown instead.
+    let aiWeekSummary: (Date) -> String?
     let onMeetingSplitChange: (Date, Int) -> Void
     let onResetMeetingSplit: (Date) -> Void
     let onDelete: (Date) -> Void
@@ -48,35 +52,13 @@ struct DailyBarChartView: View {
         return spans[start..<end]
     }
 
-    /// One sentence per week summarizing the daily breakdown: meetings,
-    /// focus time, breaks, and total work, each averaged per weekday that
-    /// has any recorded data.
-    ///
-    /// "Break" isn't a separately-tracked quantity — it's whatever part of
-    /// the span isn't meeting time and isn't focus time (`breakMinutesUsed`,
-    /// the same deduction `effectiveHours` already applies). Meetings/focus
-    /// only average over days where calendar data is available; when no day
-    /// in the week has it, those two clauses are omitted rather than shown
-    /// as a misleading 0h.
-    private func weekStatsLine(for spans: [WorkdaySpan?]) -> String? {
-        let daysWithData = spans.compactMap { $0 }.filter { $0.hours > 0 }
-        guard !daysWithData.isEmpty else { return nil }
-
-        let workAvg = daysWithData.reduce(0.0) { $0 + $1.effectiveHours } / Double(daysWithData.count)
-        let breakAvg = daysWithData.reduce(0.0) { $0 + Double($1.breakMinutesUsed) / 60.0 } / Double(daysWithData.count)
-
-        let daysWithMeetingData = daysWithData.filter { $0.displayMeetingMinutes != nil }
-        let meetingAvg = daysWithMeetingData.isEmpty ? nil :
-            daysWithMeetingData.reduce(0.0) { $0 + Double($1.displayMeetingMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
-        let focusAvg = daysWithMeetingData.isEmpty ? nil :
-            daysWithMeetingData.reduce(0.0) { $0 + Double($1.focusMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
-
-        func h(_ value: Double) -> String { "\(Int(value.rounded()))h" }
-
-        if let meetingAvg, let focusAvg {
-            return "\(h(meetingAvg)) meetings/day, \(h(focusAvg)) focus time/day, \(h(breakAvg)) breaks a day, and \(h(workAvg)) work/day"
-        }
-        return "\(h(breakAvg)) breaks a day, and \(h(workAvg)) work/day"
+    /// The header line for a week: the LLM-generated caption when one's
+    /// available, else the deterministic "Nh meetings/day, ..." sentence
+    /// built from the same `WeekHeaderStats`. Nil when the week has no
+    /// data at all yet.
+    private func weekHeaderLine(weekStart: Date, spans: [WorkdaySpan?]) -> String? {
+        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: spans) else { return nil }
+        return aiWeekSummary(weekStart) ?? stats.fallbackSentence
     }
 
     var body: some View {
@@ -111,7 +93,8 @@ struct DailyBarChartView: View {
             Spacer().frame(width: Self.yAxisWidth)
             HStack(spacing: Self.columnSpacing) {
                 ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                    if let line = weekStatsLine(for: Array(weekSpans(for: week))) {
+                    if let weekStart = week.first,
+                       let line = weekHeaderLine(weekStart: weekStart, spans: Array(weekSpans(for: week))) {
                         Text(line)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.secondary)

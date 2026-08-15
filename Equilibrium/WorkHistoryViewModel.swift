@@ -7,6 +7,11 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var weeklyInsight: String?
     @Published var calendarAccessGranted: Bool = false
+    /// LLM-generated "You worked ..." caption per week, keyed by that
+    /// week's first day (`dayKey`). Falls back to a deterministic sentence
+    /// (see `WeeklyInsightGenerator.WeekHeaderStats.fallbackSentence`)
+    /// wherever a key is missing — model unavailable, or not generated yet.
+    @Published var weekHeaderSummaries: [String: String] = [:]
 
     private let store = WorkHistoryStore()
     private let liveEventStore = LiveEventStore()
@@ -21,6 +26,10 @@ final class WorkHistoryViewModel: ObservableObject {
     }()
 
     private static let autoRefreshInterval: TimeInterval = 5 * 60
+
+    /// The `WeekHeaderStats` each week's summary was last generated from,
+    /// so an unchanged week doesn't re-invoke the model on every refresh.
+    private var lastWeekHeaderStats: [String: WeeklyInsightGenerator.WeekHeaderStats] = [:]
 
     private let dayKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -87,6 +96,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 self.isLoading = false
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store)
                 self.refreshInsight()
+                self.refreshWeekHeaderSummaries()
             }
 
             // Annotate spans with meeting data when calendar access is available.
@@ -127,6 +137,43 @@ final class WorkHistoryViewModel: ObservableObject {
         }
     }
 
+    /// Regenerates the LLM "You worked ..." caption for each week currently
+    /// shown in the chart (mirrors `DailyBarChartView`'s own 7-day grouping
+    /// of the same rolling window). Skips any week whose `WeekHeaderStats`
+    /// haven't changed since the last generation, so an unchanged week
+    /// doesn't re-invoke the model on every 5-minute auto-refresh. Silently
+    /// does nothing if Foundation Models isn't available.
+    func refreshWeekHeaderSummaries() {
+        guard WeeklyInsightGenerator.isAvailable else { return }
+        guard #available(macOS 26.0, *) else { return }
+
+        let days = rollingWindowDays(weeks: 2)
+        for weekStart in stride(from: 0, to: days.count, by: 7) {
+            let week = Array(days[weekStart..<min(weekStart + 7, days.count)])
+            guard let first = week.first else { continue }
+            let key = dayKey(for: first)
+
+            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: week.map { span(for: $0) }) else {
+                lastWeekHeaderStats[key] = nil
+                weekHeaderSummaries[key] = nil
+                continue
+            }
+            guard lastWeekHeaderStats[key] != stats else { continue }
+            lastWeekHeaderStats[key] = stats
+
+            Task {
+                weekHeaderSummaries[key] = await WeeklyInsightGenerator.generateWeekHeaderSummary(for: stats)
+            }
+        }
+    }
+
+    /// The LLM-generated caption for the week starting on `day`, or nil if
+    /// unavailable/not yet generated — callers should fall back to
+    /// `WeeklyInsightGenerator.WeekHeaderStats.fallbackSentence`.
+    func weekHeaderSummary(forWeekStarting day: Date) -> String? {
+        weekHeaderSummaries[dayKey(for: day)]
+    }
+
     /// Re-reads calendar events for all days that have a WorkdaySpan and
     /// updates each span's `meetingMinutes` / `longestFocusBlockMinutes`.
     @MainActor
@@ -151,6 +198,9 @@ final class WorkHistoryViewModel: ObservableObject {
         spansByDay = updated
         // Persist updated spans so meeting data survives across launches.
         store.save(updated)
+        // Meeting data just landed, which affects the meeting/focus split
+        // the week summaries describe — refresh those that changed.
+        refreshWeekHeaderSummaries()
     }
 
     /// Handles a live IOKit power event: persists it and triggers a refresh
