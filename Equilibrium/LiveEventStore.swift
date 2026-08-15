@@ -5,7 +5,12 @@ import Foundation
 ///
 /// Stored as a flat JSON array keyed by date.  Events older than 30 days
 /// are pruned automatically on every save to keep the file small.
-final class LiveEventStore {
+///
+/// `Sendable` because its only stored state is an immutable `fileURL`; every
+/// call reads/writes the file directly rather than caching anything, so it's
+/// safe to use from any thread/actor — including `WorkHistoryViewModel`'s
+/// detached background refresh task.
+final class LiveEventStore: Sendable {
     private let fileURL: URL
 
     /// Maximum age of events kept on disk (30 days).
