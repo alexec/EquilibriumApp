@@ -12,6 +12,27 @@ struct EquilibriumApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            // Replaces the default "About Equilibrium" item with one that
+            // opens the standard panel but with our "why I built this"
+            // story as its credits text, instead of a custom in-window
+            // popover living behind a "?" button.
+            CommandGroup(replacing: .appInfo) {
+                Button("About Equilibrium") {
+                    NSApp.orderFrontStandardAboutPanel(
+                        options: [
+                            NSApplication.AboutPanelOptionKey.credits: NSAttributedString(
+                                string: AboutStory.text,
+                                attributes: [
+                                    .font: NSFont.systemFont(ofSize: 11),
+                                    .foregroundColor: NSColor.secondaryLabelColor,
+                                ]
+                            )
+                        ]
+                    )
+                }
+            }
+        }
 
         MenuBarExtra {
             MenuBarStatusView(viewModel: viewModel)
