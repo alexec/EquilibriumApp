@@ -7,11 +7,7 @@ import SwiftUI
 struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
-    let averageHours: (ArraySlice<Date>) -> Double
-    let meetingPercentage: (ArraySlice<Date>) -> Double?
     let recommendedHours: (Date) -> Double?
-    /// Rolling 8-week average hours per weekday; used to draw the baseline overlay.
-    let rollingAverageHoursPerDay: Double
     let onSave: (Date, Date, Date, Int) -> Void
     let onClear: (Date) -> Void
     let onDelete: (Date) -> Void
@@ -20,9 +16,8 @@ struct DailyBarChartView: View {
 
     static let minimumHeight: CGFloat = 220
     private static let labelHeight: CGFloat = 44
-    // Fits three stacked lines in the header: avg hours/day, meeting %, and
-    // the late-nights/drift/weekend narrative.
-    private static let weekHeaderHeight: CGFloat = 44
+    // Fits the per-week stats sentence, which can wrap to two lines.
+    private static let weekHeaderHeight: CGFloat = 32
     private static let yAxisWidth: CGFloat = 36
     private static let yAxisHours: [Double] = [6, 9, 12, 15, 18, 21]
     private static let barWidth: CGFloat = 10
@@ -52,21 +47,35 @@ struct DailyBarChartView: View {
         return spans[start..<end]
     }
 
-    /// Per-week narrative strings (late nights, drift, weekend work). Drift
-    /// is measured relative to the preceding week's median start time.
-    private var weekNarratives: [String?] {
-        let allWeeks = weeks
-        // Pre-compute each week's span slice and median in one pass so we
-        // don't recompute the previous week's median on every iteration.
-        let spansPerWeek = allWeeks.map { Array(weekSpans(for: $0)) }
-        let mediansPerWeek = spansPerWeek.map { WeeklyInsights.medianStartHour(spans: $0) }
-        return allWeeks.indices.map { i in
-            WeeklyInsights.narrative(
-                days: Array(allWeeks[i]),
-                spans: spansPerWeek[i],
-                previousMedianStart: i > 0 ? mediansPerWeek[i - 1] : nil
-            )
+    /// One sentence per week summarizing the daily breakdown: meetings,
+    /// focus time, breaks, and total work, each averaged per weekday that
+    /// has any recorded data.
+    ///
+    /// "Break" isn't a separately-tracked quantity — it's whatever part of
+    /// the span isn't meeting time and isn't focus time (`breakMinutesUsed`,
+    /// the same deduction `effectiveHours` already applies). Meetings/focus
+    /// only average over days where calendar data is available; when no day
+    /// in the week has it, those two clauses are omitted rather than shown
+    /// as a misleading 0h.
+    private func weekStatsLine(for spans: [WorkdaySpan?]) -> String? {
+        let daysWithData = spans.compactMap { $0 }.filter { $0.hours > 0 }
+        guard !daysWithData.isEmpty else { return nil }
+
+        let workAvg = daysWithData.reduce(0.0) { $0 + $1.effectiveHours } / Double(daysWithData.count)
+        let breakAvg = daysWithData.reduce(0.0) { $0 + Double($1.breakMinutesUsed) / 60.0 } / Double(daysWithData.count)
+
+        let daysWithMeetingData = daysWithData.filter { $0.meetingMinutes != nil }
+        let meetingAvg = daysWithMeetingData.isEmpty ? nil :
+            daysWithMeetingData.reduce(0.0) { $0 + Double($1.meetingMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
+        let focusAvg = daysWithMeetingData.isEmpty ? nil :
+            daysWithMeetingData.reduce(0.0) { $0 + Double($1.focusMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
+
+        func h(_ value: Double) -> String { "\(Int(value.rounded()))h" }
+
+        if let meetingAvg, let focusAvg {
+            return "\(h(meetingAvg)) meetings/day, \(h(focusAvg)) focus time/day, \(h(breakAvg)) breaks a day, and \(h(workAvg)) work/day"
         }
+        return "\(h(breakAvg)) breaks a day, and \(h(workAvg)) work/day"
     }
 
     var body: some View {
@@ -100,57 +109,29 @@ struct DailyBarChartView: View {
         HStack(spacing: 6) {
             Spacer().frame(width: Self.yAxisWidth)
             HStack(spacing: Self.columnSpacing) {
-                ForEach(Array(weeks.enumerated()), id: \.offset) { i, week in
-                    VStack(spacing: 1) {
-                        Text("Avg \(Int(averageHours(week).rounded(.up)))h/day")
-                            .font(.system(size: 10, weight: .medium))
+                ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                    if let line = weekStatsLine(for: Array(weekSpans(for: week))) {
+                        Text(line)
+                            .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.secondary)
-                        if let pct = meetingPercentage(week) {
-                            Text("\(Int(pct.rounded()))% meetings")
-                                .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.orange.opacity(0.9))
-                        }
-                        if let note = weekNarratives[i] {
-                            Text(note)
-                                .font(.system(size: 9, weight: .regular))
-                                .foregroundColor(.orange)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                        }
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        Spacer().frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
         }
     }
 
     private func dayColumns(chartHeight: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            HStack(alignment: .top, spacing: Self.columnSpacing) {
-                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
-                    dayColumn(day: day, index: index, chartHeight: chartHeight)
-                }
-            }
-            if rollingAverageHoursPerDay > 0 {
-                rollingAverageOverlay(chartHeight: chartHeight)
+        HStack(alignment: .top, spacing: Self.columnSpacing) {
+            ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                dayColumn(day: day, index: index, chartHeight: chartHeight)
             }
         }
-    }
-
-    /// A dashed horizontal rule at the y-position that corresponds to
-    /// working `rollingAverageHoursPerDay` hours starting at 9am.
-    private func rollingAverageOverlay(chartHeight: CGFloat) -> some View {
-        let endHour = (ChartScale.workdayStartHour + rollingAverageHoursPerDay)
-            .clamped(to: ChartScale.startHour...ChartScale.endHour)
-        let yOffset = CGFloat(ChartScale.fraction(of: endHour)) * chartHeight
-        return GeometryReader { _ in
-            Rectangle()
-                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                .foregroundColor(Color.accentColor.opacity(0.65))
-                .frame(height: 1.5)
-                .offset(y: yOffset)
-        }
-        .allowsHitTesting(false)
     }
 
     private func dayColumn(day: Date, index: Int, chartHeight: CGFloat) -> some View {

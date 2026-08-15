@@ -61,6 +61,16 @@ struct WorkdaySpan: Codable, Identifiable {
         Int(effectiveHours.rounded(.up))
     }
 
+    /// Minutes of this span not counted as worked time — i.e. `hours` minus
+    /// `effectiveHours`. This is the same deduction `effectiveHours` already
+    /// applies (manual `breakMinutes` if set, else auto-detected
+    /// `intraBreakMinutes`); exposed here as its own quantity because it's
+    /// also how "break" is defined for display: whatever time in the span
+    /// isn't meeting time and isn't focus time.
+    var breakMinutesUsed: Int {
+        Int((hours * 60.0).rounded()) - Int(effectiveHours * 60.0)
+    }
+
     /// Focus minutes: effective minutes minus meeting time.
     var focusMinutes: Int? {
         guard let meeting = meetingMinutes else { return nil }
