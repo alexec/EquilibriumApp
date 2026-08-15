@@ -33,7 +33,12 @@ final class WorkHistoryStore {
         for span in freshSpans {
             if stored[span.dayKey]?.isManual == true { continue }
             if span.dayKey == today || span.dayKey == yesterday || stored[span.dayKey] == nil {
-                stored[span.dayKey] = span
+                var newSpan = span
+                // A manual meeting/focus split (dragged on the bar) survives
+                // the automatic recompute — only start/end/break come from
+                // the fresh wake-data pass.
+                newSpan.manualMeetingMinutes = stored[span.dayKey]?.manualMeetingMinutes
+                stored[span.dayKey] = newSpan
             }
         }
         save(stored)

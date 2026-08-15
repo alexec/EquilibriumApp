@@ -1,7 +1,16 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// A single day's vertical bar: renders actual worked hours when present,
 /// otherwise a recommendation (or "over budget") placeholder.
+///
+/// When calendar data (or a manual override) is available, the worked
+/// portion of the bar splits into two drag-resizable segments — Focus
+/// (blue, top) and Meeting (yellow, below it) — followed by a fixed Break
+/// segment (gray, bottom): whatever part of the span isn't meeting time and
+/// isn't focus time. Without calendar data there's just Focus/Break.
 struct DayBar: View {
     let span: WorkdaySpan?
     let chartHeight: CGFloat
@@ -10,18 +19,22 @@ struct DayBar: View {
     let showsWorkdayTrack: Bool
     let showsHoursLabel: Bool
     let recommendedHours: Double?
+    /// Called with the new meeting-minute value while the focus/meeting
+    /// boundary is being dragged, and again with the final value on release.
+    var onMeetingSplitChange: (Int) -> Void = { _ in }
+
+    @State private var dragTranslation: CGFloat = 0
+    @State private var isDragging = false
+
+    private static let focusColor = Color.blue
+    private static let meetingColor = Color.yellow
+    private static let breakColor = Color.gray.opacity(0.55)
 
     private var calendar: Calendar { .current }
 
     private func hourFraction(_ date: Date) -> Double {
         let comps = calendar.dateComponents([.hour, .minute], from: date)
         return Double(comps.hour ?? 0) + Double(comps.minute ?? 0) / 60.0
-    }
-
-    private func timeLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
     }
 
     private func hoursLabel(_ span: WorkdaySpan) -> String {
@@ -89,43 +102,12 @@ struct DayBar: View {
             }
 
             if let span, span.hours > 0 {
-                let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-                let endFrac = ChartScale.fraction(of: hourFraction(span.end))
-                let topOffset = CGFloat(startFrac) * chartHeight
-                let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
-                let isOver = isWeekend || span.roundedUpHours > 8
-
-                if let meetingFraction = span.meetingFraction, meetingFraction > 0 {
-                    // Dual-tone: bottom portion = meetings (orange), rest = focus (gray/red)
-                    let meetingHeight = barHeight * CGFloat(meetingFraction)
-                    let focusHeight = max(barHeight - meetingHeight, 0)
-                    let focusColor: Color = isOver ? .red : .gray
-                    let meetingColor: Color = .orange
-
-                    ZStack(alignment: .top) {
-                        // Focus segment (top)
-                        if focusHeight > 0 {
-                            Capsule()
-                                .fill(focusColor)
-                                .frame(width: barWidth, height: max(focusHeight, barWidth / 2))
-                        }
-                        // Meeting segment (bottom), flush with the focus segment
-                        let meetingOffset: CGFloat = focusHeight > 0 ? max(focusHeight, barWidth / 2) : 0
-                        Capsule()
-                            .fill(meetingColor)
-                            .frame(width: barWidth, height: max(meetingHeight, barWidth / 2))
-                            .offset(y: meetingOffset)
-                    }
-                    .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-                    .offset(y: topOffset)
-                } else {
-                    Capsule()
-                        .fill(isOver ? Color.red : Color.gray)
-                        .frame(width: barWidth, height: max(barHeight, barWidth))
-                        .offset(y: topOffset)
-                }
+                daySegments(span: span)
 
                 if showsHoursLabel {
+                    let startFrac = ChartScale.fraction(of: hourFraction(span.start))
+                    let topOffset = CGFloat(startFrac) * chartHeight
+                    let isOver = span.roundedUpHours > 8
                     Text(hoursLabel(span))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundColor(isOver ? .red : .secondary)
@@ -136,25 +118,86 @@ struct DayBar: View {
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
-        .help(helpText)
     }
 
-    private var helpText: String {
-        guard let span else { return "" }
-        var parts = ["\(timeLabel(span.start)) – \(timeLabel(span.end))"]
-        if let meetingMins = span.meetingMinutes {
-            let meetingH = meetingMins / 60
-            let meetingM = meetingMins % 60
-            let focusMins = span.focusMinutes ?? 0
-            let focusH = focusMins / 60
-            let focusM = focusMins % 60
-            parts.append("Meetings: \(meetingH)h \(meetingM)m · Focus: \(focusH)h \(focusM)m")
+    /// The stacked Focus/Meeting/Break capsules for a day with real hours,
+    /// plus the drag handle on the Focus/Meeting boundary when a split
+    /// (calendar-derived or manually overridden) is available to adjust.
+    @ViewBuilder
+    private func daySegments(span: WorkdaySpan) -> some View {
+        let startFrac = ChartScale.fraction(of: hourFraction(span.start))
+        let endFrac = ChartScale.fraction(of: hourFraction(span.end))
+        let topOffset = CGFloat(startFrac) * chartHeight
+        let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
+
+        // Worked portion (focus + meeting) vs. break, in points.
+        let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
+        let workedHeight = barHeight * workedFraction
+        let breakHeight = max(barHeight - workedHeight, 0)
+
+        // Live-dragged meeting height, clamped within the worked region.
+        let baseMeetingFraction = CGFloat(span.meetingFraction ?? 0)
+        let baseMeetingHeight = workedHeight * baseMeetingFraction
+        let meetingHeight: CGFloat = {
+            guard span.meetingFraction != nil else { return 0 }
+            let raw = isDragging ? (baseMeetingHeight - dragTranslation) : baseMeetingHeight
+            return min(max(raw, 0), workedHeight)
+        }()
+        let focusHeight = max(workedHeight - meetingHeight, 0)
+
+        ZStack(alignment: .top) {
+            if focusHeight > 0 {
+                Capsule()
+                    .fill(Self.focusColor)
+                    .frame(width: barWidth, height: max(focusHeight, barWidth / 2))
+            }
+            if meetingHeight > 0 {
+                Capsule()
+                    .fill(Self.meetingColor)
+                    .frame(width: barWidth, height: max(meetingHeight, barWidth / 2))
+                    .offset(y: focusHeight)
+            }
+            if breakHeight > 0 {
+                Capsule()
+                    .fill(Self.breakColor)
+                    .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
+                    .offset(y: focusHeight + meetingHeight)
+            }
+
+            // Invisible, wider drag handle centered on the focus/meeting
+            // boundary — only present when there's a split to adjust.
+            if span.meetingFraction != nil, workedHeight > 0 {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: barWidth + 20, height: 14)
+                    .contentShape(Rectangle())
+                    .offset(y: focusHeight - 7)
+                    .gesture(
+                        DragGesture(minimumDistance: 2)
+                            .onChanged { value in
+                                isDragging = true
+                                dragTranslation = value.translation.height
+                            }
+                            .onEnded { value in
+                                let effectiveMinutes = Int(span.effectiveHours * 60.0)
+                                let finalMeetingHeight = min(max(baseMeetingHeight - value.translation.height, 0), workedHeight)
+                                let finalFraction = workedHeight > 0 ? Double(finalMeetingHeight / workedHeight) : 0
+                                // Snap to the nearest 5 minutes.
+                                let rawMinutes = Int((finalFraction * Double(effectiveMinutes)).rounded())
+                                let snapped = (rawMinutes / 5) * 5
+                                isDragging = false
+                                dragTranslation = 0
+                                onMeetingSplitChange(snapped)
+                            }
+                    )
+                    #if os(macOS)
+                    .onHover { hovering in
+                        if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+                    #endif
+            }
         }
-        if let longestFocus = span.longestFocusBlockMinutes, longestFocus > 0 {
-            let lh = longestFocus / 60
-            let lm = longestFocus % 60
-            parts.append("Longest focus block: \(lh > 0 ? "\(lh)h " : "")\(lm)m")
-        }
-        return parts.joined(separator: "\n")
+        .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
+        .offset(y: topOffset)
     }
 }

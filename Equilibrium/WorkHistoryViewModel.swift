@@ -204,21 +204,6 @@ final class WorkHistoryViewModel: ObservableObject {
         spansByDay[dayKey(for: date)]
     }
 
-    /// Manually sets (or overwrites) the given day's worked hours as a
-    /// permanent override that automatic refreshes will never replace.
-    /// Times and break duration are clipped to the nearest 30-minute mark.
-    func setManualHours(for date: Date, start: Date, end: Date, breakMinutes: Int) {
-        let span = WorkdaySpan(
-            dayKey: dayKey(for: date),
-            start: TimeRounding.roundedToNearestHalfHour(start),
-            end: TimeRounding.roundedToNearestHalfHour(end),
-            breakMinutes: breakMinutes,
-            isManual: true
-        )
-        spansByDay = store.setManualSpan(span)
-        refreshInsight()
-    }
-
     /// Permanently blanks out a day's hours (0h), protected like any other
     /// manual override so automatic refreshes never repopulate it.
     func deleteHours(for date: Date) {
@@ -227,10 +212,26 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshInsight()
     }
 
-    /// Clears a manual override for the given day.
-    func clearManualHours(for date: Date) {
-        spansByDay = store.clearManualSpan(dayKey: dayKey(for: date))
-        refreshInsight()
+    /// Sets a manual meeting/focus split for a day — from dragging the
+    /// boundary on its bar — clamped to that day's effective (worked)
+    /// minutes. Start/end/break are untouched and stay fully automatic.
+    func setMeetingSplit(for date: Date, meetingMinutes: Int) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        let effectiveMinutes = max(Int(span.effectiveHours * 60.0), 0)
+        span.manualMeetingMinutes = min(max(meetingMinutes, 0), effectiveMinutes)
+        spansByDay[key] = span
+        store.save(spansByDay)
+    }
+
+    /// Clears a manual meeting/focus split, reverting the day's display to
+    /// the calendar-derived meeting time.
+    func resetMeetingSplit(for date: Date) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        span.manualMeetingMinutes = nil
+        spansByDay[key] = span
+        store.save(spansByDay)
     }
 
     /// A rolling window of full Sat-Fri weeks ending with the current week
@@ -243,59 +244,6 @@ final class WorkHistoryViewModel: ObservableObject {
     /// This week's full Saturday-through-Friday range, including future days.
     func currentWeekDays() -> [Date] {
         WeekCalendar.currentWeekDays(calendar: calendar)
-    }
-
-    /// Average hours/weekday across a set of days: sum of all hours worked
-    /// (any day) divided by the number of weekdays that have any recorded
-    /// data, so incomplete weeks and weekend work don't skew the figure.
-    func averageHours(for days: [Date]) -> Double {
-        let total = days.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-
-        let weekdaysWithData = days.filter { day in
-            guard let span = span(for: day), span.hours > 0 else { return false }
-            return !WeekCalendar.isWeekend(day, calendar: calendar)
-        }.count
-
-        guard weekdaysWithData > 0 else { return 0 }
-        return total / Double(weekdaysWithData)
-    }
-
-    /// Rolling mean of effective hours/weekday over the most recent `weeks`
-    /// complete weeks (excluding the current, in-progress week). Only
-    /// weekdays that have any recorded data are included in the denominator,
-    /// so sparse history doesn't artificially deflate the average.
-    func rollingAverageHoursPerDay(weeks: Int = 8) -> Double {
-        // Current week days are excluded so the baseline is not influenced
-        // by the week the user is comparing against.
-        let currentWeek = Set(currentWeekDays().map { dayKey(for: $0) })
-        let windowDays = rollingWindowDays(weeks: weeks)
-            .filter { !currentWeek.contains(dayKey(for: $0)) }
-        return averageHours(for: windowDays)
-    }
-
-    /// A one-line insight comparing this week's total against the 8-week
-    /// rolling average, e.g. "This week: 43h — 12% above your 8-week avg."
-    /// Returns nil when there is not enough history to produce a meaningful
-    /// comparison (baseline average is zero).
-    var rollingAverageInsight: String? {
-        let weekDays = currentWeekDays()
-        let thisWeekTotal = weekDays.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-
-        // Only weekdays with data contribute to the denominator.
-        let weekdaysWithData = weekDays.filter { day in
-            guard let s = span(for: day), s.hours > 0 else { return false }
-            return !WeekCalendar.isWeekend(day, calendar: calendar)
-        }.count
-        guard weekdaysWithData > 0 else { return nil }
-
-        let baseline = rollingAverageHoursPerDay(weeks: 8)
-        guard baseline > 0 else { return nil }
-
-        // Express this week in weekly hours by scaling the per-day average.
-        let baselineWeekly = baseline * 5
-        let diff = ((thisWeekTotal - baselineWeekly) / baselineWeekly * 100).rounded()
-        let sign = diff >= 0 ? "+" : ""
-        return "This week: \(Int(thisWeekTotal.rounded(.up)))h — \(sign)\(Int(diff))% vs your 8-week avg (\(Int(baselineWeekly.rounded()))h)"
     }
 
     /// Recommended hours to work on `date` toward a 40-hour week, or nil if
@@ -316,25 +264,6 @@ final class WorkHistoryViewModel: ObservableObject {
         let week = currentWeekDays()
         let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
         return WorkloadRecommender.weeklyTargetHours - worked
-    }
-
-    /// Meeting percentage (0–100) across a set of days, or nil when no
-    /// calendar data is available for any day with hours.
-    func meetingPercentage(for days: [Date]) -> Double? {
-        var totalEffectiveMinutes = 0
-        var totalMeetingMinutes = 0
-        var hasCalendarData = false
-
-        for day in days {
-            guard let span = span(for: day), span.hours > 0 else { continue }
-            guard let meeting = span.meetingMinutes else { continue }
-            hasCalendarData = true
-            totalEffectiveMinutes += Int(span.effectiveHours * 60.0)
-            totalMeetingMinutes += meeting
-        }
-
-        guard hasCalendarData, totalEffectiveMinutes > 0 else { return nil }
-        return Double(totalMeetingMinutes) / Double(totalEffectiveMinutes) * 100.0
     }
 }
 
