@@ -16,6 +16,16 @@ struct WorkdaySpan: Codable, Identifiable {
     /// wake/sleep detection must never overwrite it.
     var isManual: Bool = false
 
+    /// Total minutes of calendar meeting time within this workday (all-day
+    /// and free events excluded). Populated from EventKit after calendar
+    /// permission is granted; nil when permission is denied or not yet
+    /// determined.
+    var meetingMinutes: Int? = nil
+
+    /// Length (in minutes) of the longest contiguous meeting-free block
+    /// within this workday. Populated alongside `meetingMinutes`.
+    var longestFocusBlockMinutes: Int? = nil
+
     /// Raw duration from start to end, before subtracting breaks. This is
     /// what the chart's capsule renders (it spans the actual time present),
     /// independent of how much of that time was a break.
@@ -35,12 +45,31 @@ struct WorkdaySpan: Codable, Identifiable {
         Int(effectiveHours.rounded(.up))
     }
 
-    init(dayKey: String, start: Date, end: Date, breakMinutes: Int = 0, isManual: Bool = false) {
+    /// Focus minutes: effective minutes minus meeting time.
+    var focusMinutes: Int? {
+        guard let meeting = meetingMinutes else { return nil }
+        let effectiveMinutes = Int(effectiveHours * 60.0)
+        return max(0, effectiveMinutes - meeting)
+    }
+
+    /// Meeting fraction (0–1) relative to effective hours, or nil when
+    /// no calendar data is available.
+    var meetingFraction: Double? {
+        guard let meeting = meetingMinutes else { return nil }
+        let effectiveMinutes = Int(effectiveHours * 60.0)
+        guard effectiveMinutes > 0 else { return nil }
+        return Double(min(meeting, effectiveMinutes)) / Double(effectiveMinutes)
+    }
+
+    init(dayKey: String, start: Date, end: Date, breakMinutes: Int = 0, isManual: Bool = false,
+         meetingMinutes: Int? = nil, longestFocusBlockMinutes: Int? = nil) {
         self.dayKey = dayKey
         self.start = start
         self.end = end
         self.breakMinutes = breakMinutes
         self.isManual = isManual
+        self.meetingMinutes = meetingMinutes
+        self.longestFocusBlockMinutes = longestFocusBlockMinutes
     }
 
     init(from decoder: Decoder) throws {
@@ -50,5 +79,7 @@ struct WorkdaySpan: Codable, Identifiable {
         end = try container.decode(Date.self, forKey: .end)
         breakMinutes = try container.decodeIfPresent(Int.self, forKey: .breakMinutes) ?? 0
         isManual = try container.decodeIfPresent(Bool.self, forKey: .isManual) ?? false
+        meetingMinutes = try container.decodeIfPresent(Int.self, forKey: .meetingMinutes)
+        longestFocusBlockMinutes = try container.decodeIfPresent(Int.self, forKey: .longestFocusBlockMinutes)
     }
 }
