@@ -104,11 +104,7 @@ enum WeeklySummaryNotifier {
     }
 
     private static func formatHours(_ hours: Double) -> String {
-        if hours.truncatingRemainder(dividingBy: 1) == 0 {
-            return "\(Int(hours))h"
-        }
-        let formatted = String(format: "%.1f", hours)
-        return "\(formatted)h"
+        HoursFormat.string(hours)
     }
 
     private static func dayAbbreviation(for dayKey: String, calendar: Calendar) -> String {

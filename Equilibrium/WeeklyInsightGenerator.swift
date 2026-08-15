@@ -50,11 +50,10 @@ enum WeeklyInsightGenerator {
         /// The deterministic "Nh meetings/day, ..." sentence, used whenever
         /// the LLM is unavailable or hasn't produced a summary yet.
         var fallbackSentence: String {
-            func h(_ value: Double) -> String { "\(Int(value.rounded()))h" }
             if let meetingAvgHours, let focusAvgHours {
-                return "\(h(meetingAvgHours)) meetings/day, \(h(focusAvgHours)) focus time/day, \(h(breakAvgHours)) breaks a day, and \(h(workAvgHours)) work/day"
+                return "\(HoursFormat.string(meetingAvgHours)) meetings/day, \(HoursFormat.string(focusAvgHours)) focus time/day, \(HoursFormat.string(breakAvgHours)) breaks a day, and \(HoursFormat.string(workAvgHours)) work/day"
             }
-            return "\(h(breakAvgHours)) breaks a day, and \(h(workAvgHours)) work/day"
+            return "\(HoursFormat.string(breakAvgHours)) breaks a day, and \(HoursFormat.string(workAvgHours)) work/day"
         }
     }
 
@@ -89,13 +88,14 @@ enum WeeklyInsightGenerator {
             """
         })
 
-        func h(_ value: Double) -> String { String(format: "%.1f", value) }
-        var lines = ["Average per weekday this week:", "Work: \(h(stats.workAvgHours))h"]
+        // Rounded to the nearest half hour before it ever reaches the model,
+        // so it can't echo back noisy precision like "8.0" or "7.83".
+        var lines = ["Average per weekday this week:", "Work: \(HoursFormat.string(stats.workAvgHours))"]
         if let meeting = stats.meetingAvgHours, let focus = stats.focusAvgHours {
-            lines.append("Meetings: \(h(meeting))h")
-            lines.append("Focus: \(h(focus))h")
+            lines.append("Meetings: \(HoursFormat.string(meeting))")
+            lines.append("Focus: \(HoursFormat.string(focus))")
         }
-        lines.append("Breaks: \(h(stats.breakAvgHours))h")
+        lines.append("Breaks: \(HoursFormat.string(stats.breakAvgHours))")
 
         do {
             let response = try await session.respond(to: lines.joined(separator: "\n"))

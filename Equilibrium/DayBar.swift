@@ -1,6 +1,25 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+
+/// An invisible NSView whose only job is telling AppKit not to treat a
+/// click here as "drag the window." SwiftUI gesture-priority tricks
+/// (`.highPriorityGesture`, `minimumDistance: 0`) weren't reliable against
+/// `window.isMovableByWindowBackground` (set in `WindowChromeRemover`,
+/// since the window has no title bar) — it kept winning the mouseDown race
+/// and dragging the whole window instead of resizing a capsule. This is
+/// the actual AppKit-level override: `mouseDownCanMoveWindow` is what
+/// `isMovableByWindowBackground` consults per-view before starting a
+/// window drag, so returning `false` here takes precedence over it,
+/// regardless of what SwiftUI's gesture recognizers are doing.
+private struct WindowDragBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { BlockerView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class BlockerView: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+    }
+}
 #endif
 
 /// A single day's vertical bar: renders actual worked hours when present,
@@ -188,19 +207,21 @@ struct DayBar: View {
             }
         )
         .overlay(
-            // Invisible, wide drag surface covering the whole bar — not just
-            // a thin strip on the boundary — so a drag started anywhere on
-            // the visible capsules is captured by this gesture rather than
-            // falling through to the window's isMovableByWindowBackground,
-            // which otherwise wins the mouseDown and drags the whole window.
-            // minimumDistance: 0 claims the touch immediately for the same
-            // reason: any delay lets the window-drag get there first.
+            // Wide drag surface covering the whole bar — not just a thin
+            // strip on the boundary — so a drag started anywhere on the
+            // visible capsules is captured here. WindowDragBlocker (macOS
+            // only; see its doc comment) is what actually stops the window
+            // from moving; the gesture-priority settings below are backup,
+            // not the real fix.
             Group {
                 if span.meetingFraction != nil, workedHeight > 0 {
                     Rectangle()
                         .fill(Color.clear)
                         .frame(width: barWidth + 20, height: max(barHeight, barWidth))
                         .contentShape(Rectangle())
+                        #if os(macOS)
+                        .background(WindowDragBlocker())
+                        #endif
                         .highPriorityGesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
