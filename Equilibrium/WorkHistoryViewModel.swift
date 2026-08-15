@@ -84,7 +84,7 @@ final class WorkHistoryViewModel: ObservableObject {
     ///
     /// Deduplication runs in O(n+m): pmset events are bucketed by (kind,
     /// minute) so that each live event can be checked in O(1).
-    static func mergedEvents(live: [PowerEvent], pmset: [PowerEvent]) -> [PowerEvent] {
+    nonisolated static func mergedEvents(live: [PowerEvent], pmset: [PowerEvent]) -> [PowerEvent] {
         // Build a set of (kind, minute-bucket) keys from pmset events.
         // Any live event whose minute-bucket matches is considered a duplicate.
         var pmsetBuckets = Set<String>()
@@ -109,7 +109,7 @@ final class WorkHistoryViewModel: ObservableObject {
 
     /// Returns a string key representing the event's kind and the minute it
     /// falls in, used for O(1) duplicate detection in `mergedEvents`.
-    private static func minuteBucket(_ event: PowerEvent) -> String {
+    private nonisolated static func minuteBucket(_ event: PowerEvent) -> String {
         let minute = Int(event.date.timeIntervalSinceReferenceDate / 60)
         return "\(event.kind)-\(minute)"
     }
