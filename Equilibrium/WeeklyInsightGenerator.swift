@@ -9,6 +9,13 @@ import FoundationModels
 /// API keys, nothing leaves the Mac. On older macOS, or if Apple
 /// Intelligence isn't enabled/downloaded, this is simply unavailable and
 /// callers should treat a nil result as "don't show anything."
+///
+/// The FoundationModels framework itself doesn't exist in SDKs older than
+/// macOS 26 (e.g. the Xcode 16.4 / macOS 15 SDK used by CI), so every
+/// reference to its types — not just the `import` — has to be compiled out
+/// with `#if canImport(FoundationModels)`. A `#available` guard alone isn't
+/// enough: that's a runtime check and doesn't help the compiler resolve
+/// symbols that don't exist in the SDK at all.
 enum WeeklyInsightGenerator {
     struct WeekSummary {
         var todayWeekday: String
@@ -20,10 +27,15 @@ enum WeeklyInsightGenerator {
 
     /// Whether an on-device model is ready to use right now.
     static var isAvailable: Bool {
+        #if canImport(FoundationModels)
         guard #available(macOS 26.0, *) else { return false }
         return SystemLanguageModel.default.availability == .available
+        #else
+        return false
+        #endif
     }
 
+    #if canImport(FoundationModels)
     /// Produces one short sentence about the week's pattern, or nil if the
     /// model is unavailable or generation fails for any reason (this is a
     /// nice-to-have, so failures are silent rather than surfaced).
@@ -71,4 +83,10 @@ enum WeeklyInsightGenerator {
             return nil
         }
     }
+    #else
+    /// Framework isn't in this SDK at all; always unavailable.
+    static func generateInsight(for summary: WeekSummary) async -> String? {
+        nil
+    }
+    #endif
 }
