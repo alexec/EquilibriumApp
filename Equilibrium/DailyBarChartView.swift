@@ -8,6 +8,7 @@ struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let averageHours: (ArraySlice<Date>) -> Double
+    let meetingPercentage: (ArraySlice<Date>) -> Double?
     let recommendedHours: (Date) -> Double?
     let onSave: (Date, Date, Date, Int) -> Void
     let onClear: (Date) -> Void
@@ -17,7 +18,7 @@ struct DailyBarChartView: View {
 
     static let minimumHeight: CGFloat = 220
     private static let labelHeight: CGFloat = 44
-    private static let weekHeaderHeight: CGFloat = 18
+    private static let weekHeaderHeight: CGFloat = 32
     private static let yAxisWidth: CGFloat = 36
     private static let yAxisHours: [Double] = [6, 9, 12, 15, 18, 21]
     private static let barWidth: CGFloat = 10
@@ -71,10 +72,17 @@ struct DailyBarChartView: View {
             Spacer().frame(width: Self.yAxisWidth)
             HStack(spacing: Self.columnSpacing) {
                 ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
-                    Text("Avg \(Int(averageHours(week).rounded(.up)))h/day")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    VStack(spacing: 1) {
+                        Text("Avg \(Int(averageHours(week).rounded(.up)))h/day")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                        if let pct = meetingPercentage(week) {
+                            Text("\(Int(pct.rounded()))% meetings")
+                                .font(.system(size: 9, weight: .regular))
+                                .foregroundColor(.orange.opacity(0.9))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
             }
         }

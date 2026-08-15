@@ -93,16 +93,42 @@ struct DayBar: View {
                 let endFrac = ChartScale.fraction(of: hourFraction(span.end))
                 let topOffset = CGFloat(startFrac) * chartHeight
                 let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
+                let isOver = isWeekend || span.roundedUpHours > 8
 
-                Capsule()
-                    .fill(isWeekend || span.roundedUpHours > 8 ? Color.red : Color.gray)
-                    .frame(width: barWidth, height: max(barHeight, barWidth))
+                if let meetingFraction = span.meetingFraction, meetingFraction > 0 {
+                    // Dual-tone: bottom portion = meetings (orange), rest = focus (gray/red)
+                    let meetingHeight = barHeight * CGFloat(meetingFraction)
+                    let focusHeight = max(barHeight - meetingHeight, 0)
+                    let focusColor: Color = isOver ? .red : .gray
+                    let meetingColor: Color = .orange
+
+                    ZStack(alignment: .top) {
+                        // Focus segment (top)
+                        if focusHeight > 0 {
+                            Capsule()
+                                .fill(focusColor)
+                                .frame(width: barWidth, height: max(focusHeight, barWidth / 2))
+                        }
+                        // Meeting segment (bottom), flush with the focus segment
+                        let meetingOffset: CGFloat = focusHeight > 0 ? max(focusHeight, barWidth / 2) : 0
+                        Capsule()
+                            .fill(meetingColor)
+                            .frame(width: barWidth, height: max(meetingHeight, barWidth / 2))
+                            .offset(y: meetingOffset)
+                    }
+                    .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
                     .offset(y: topOffset)
+                } else {
+                    Capsule()
+                        .fill(isOver ? Color.red : Color.gray)
+                        .frame(width: barWidth, height: max(barHeight, barWidth))
+                        .offset(y: topOffset)
+                }
 
                 if showsHoursLabel {
                     Text(hoursLabel(span))
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(isWeekend || span.roundedUpHours > 8 ? .red : .secondary)
+                        .foregroundColor(isOver ? .red : .secondary)
                         .fixedSize()
                         .offset(y: topOffset - 13)
                 }
@@ -110,6 +136,25 @@ struct DayBar: View {
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
-        .help(span.map { "\(timeLabel($0.start)) – \(timeLabel($0.end))" } ?? "")
+        .help(helpText)
+    }
+
+    private var helpText: String {
+        guard let span else { return "" }
+        var parts = ["\(timeLabel(span.start)) – \(timeLabel(span.end))"]
+        if let meetingMins = span.meetingMinutes {
+            let meetingH = meetingMins / 60
+            let meetingM = meetingMins % 60
+            let focusMins = span.focusMinutes ?? 0
+            let focusH = focusMins / 60
+            let focusM = focusMins % 60
+            parts.append("Meetings: \(meetingH)h \(meetingM)m · Focus: \(focusH)h \(focusM)m")
+        }
+        if let longestFocus = span.longestFocusBlockMinutes, longestFocus > 0 {
+            let lh = longestFocus / 60
+            let lm = longestFocus % 60
+            parts.append("Longest focus block: \(lh > 0 ? "\(lh)h " : "")\(lm)m")
+        }
+        return parts.joined(separator: "\n")
     }
 }
