@@ -2,17 +2,18 @@ import SwiftUI
 
 /// Apple Health-style vertical bar chart: one pill-shaped bar per day from
 /// start-of-work to end-of-work time, scaled from 6am to midnight. Day
-/// columns stretch to fill the available width. Tapping a day opens an
-/// edit popover for setting, overriding, or deleting its hours.
+/// columns stretch to fill the available width. Drag the boundary between
+/// a bar's focus (blue) and meeting (yellow) segments to adjust the split;
+/// hover a day to reveal Delete / Reset-split buttons.
 struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
-    let onSave: (Date, Date, Date, Int) -> Void
-    let onClear: (Date) -> Void
+    let onMeetingSplitChange: (Date, Int) -> Void
+    let onResetMeetingSplit: (Date) -> Void
     let onDelete: (Date) -> Void
 
-    @State private var editingDay: Date?
+    @State private var hoveringDay: Date?
 
     static let minimumHeight: CGFloat = 220
     private static let labelHeight: CGFloat = 44
@@ -64,9 +65,9 @@ struct DailyBarChartView: View {
         let workAvg = daysWithData.reduce(0.0) { $0 + $1.effectiveHours } / Double(daysWithData.count)
         let breakAvg = daysWithData.reduce(0.0) { $0 + Double($1.breakMinutesUsed) / 60.0 } / Double(daysWithData.count)
 
-        let daysWithMeetingData = daysWithData.filter { $0.meetingMinutes != nil }
+        let daysWithMeetingData = daysWithData.filter { $0.displayMeetingMinutes != nil }
         let meetingAvg = daysWithMeetingData.isEmpty ? nil :
-            daysWithMeetingData.reduce(0.0) { $0 + Double($1.meetingMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
+            daysWithMeetingData.reduce(0.0) { $0 + Double($1.displayMeetingMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
         let focusAvg = daysWithMeetingData.isEmpty ? nil :
             daysWithMeetingData.reduce(0.0) { $0 + Double($1.focusMinutes ?? 0) / 60.0 } / Double(daysWithMeetingData.count)
 
@@ -135,15 +136,19 @@ struct DailyBarChartView: View {
     }
 
     private func dayColumn(day: Date, index: Int, chartHeight: CGFloat) -> some View {
-        VStack(spacing: 2) {
+        let span = spans[index]
+        let isHovering = hoveringDay == day
+
+        return VStack(spacing: 2) {
             DayBar(
-                span: spans[index],
+                span: span,
                 chartHeight: chartHeight,
                 isWeekend: isWeekend(day),
                 barWidth: Self.barWidth,
                 showsWorkdayTrack: true,
                 showsHoursLabel: true,
-                recommendedHours: recommendedHours(day)
+                recommendedHours: recommendedHours(day),
+                onMeetingSplitChange: { minutes in onMeetingSplitChange(day, minutes) }
             )
             Text(weekdayLabel(day))
                 .font(.system(size: 11, weight: .medium))
@@ -151,30 +156,37 @@ struct DailyBarChartView: View {
             Text(dateLabel(day))
                 .font(.system(size: 9, weight: .regular))
                 .foregroundColor(.secondary.opacity(0.7))
+
+            // Delete / Reset-split buttons, revealed on hover so the bar
+            // itself (only ~10pt wide) doesn't need to host them.
+            HStack(spacing: 8) {
+                if span?.manualMeetingMinutes != nil {
+                    Button {
+                        onResetMeetingSplit(day)
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward.circle")
+                    }
+                    .help("Reset meeting/focus split to calendar data")
+                }
+                if (span?.hours ?? 0) > 0 {
+                    Button {
+                        onDelete(day)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Delete this day's hours")
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 10))
+            .foregroundColor(.secondary)
+            .opacity(isHovering ? 1 : 0)
+            .frame(height: 12)
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
-        .onTapGesture { editingDay = day }
-        .popover(isPresented: Binding(
-            get: { editingDay == day },
-            set: { if !$0 { editingDay = nil } }
-        )) {
-            EditHoursPopover(
-                day: day,
-                existingSpan: spans[index],
-                onSave: { start, end, breakMinutes in
-                    onSave(day, start, end, breakMinutes)
-                    editingDay = nil
-                },
-                onRemoveOverride: {
-                    onClear(day)
-                    editingDay = nil
-                },
-                onDelete: {
-                    onDelete(day)
-                    editingDay = nil
-                }
-            )
+        .onHover { hovering in
+            hoveringDay = hovering ? day : (hoveringDay == day ? nil : hoveringDay)
         }
     }
 

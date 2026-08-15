@@ -204,21 +204,6 @@ final class WorkHistoryViewModel: ObservableObject {
         spansByDay[dayKey(for: date)]
     }
 
-    /// Manually sets (or overwrites) the given day's worked hours as a
-    /// permanent override that automatic refreshes will never replace.
-    /// Times and break duration are clipped to the nearest 30-minute mark.
-    func setManualHours(for date: Date, start: Date, end: Date, breakMinutes: Int) {
-        let span = WorkdaySpan(
-            dayKey: dayKey(for: date),
-            start: TimeRounding.roundedToNearestHalfHour(start),
-            end: TimeRounding.roundedToNearestHalfHour(end),
-            breakMinutes: breakMinutes,
-            isManual: true
-        )
-        spansByDay = store.setManualSpan(span)
-        refreshInsight()
-    }
-
     /// Permanently blanks out a day's hours (0h), protected like any other
     /// manual override so automatic refreshes never repopulate it.
     func deleteHours(for date: Date) {
@@ -227,10 +212,26 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshInsight()
     }
 
-    /// Clears a manual override for the given day.
-    func clearManualHours(for date: Date) {
-        spansByDay = store.clearManualSpan(dayKey: dayKey(for: date))
-        refreshInsight()
+    /// Sets a manual meeting/focus split for a day — from dragging the
+    /// boundary on its bar — clamped to that day's effective (worked)
+    /// minutes. Start/end/break are untouched and stay fully automatic.
+    func setMeetingSplit(for date: Date, meetingMinutes: Int) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        let effectiveMinutes = max(Int(span.effectiveHours * 60.0), 0)
+        span.manualMeetingMinutes = min(max(meetingMinutes, 0), effectiveMinutes)
+        spansByDay[key] = span
+        store.save(spansByDay)
+    }
+
+    /// Clears a manual meeting/focus split, reverting the day's display to
+    /// the calendar-derived meeting time.
+    func resetMeetingSplit(for date: Date) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        span.manualMeetingMinutes = nil
+        spansByDay[key] = span
+        store.save(spansByDay)
     }
 
     /// A rolling window of full Sat-Fri weeks ending with the current week
@@ -264,6 +265,5 @@ final class WorkHistoryViewModel: ObservableObject {
         let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
         return WorkloadRecommender.weeklyTargetHours - worked
     }
-
 }
 

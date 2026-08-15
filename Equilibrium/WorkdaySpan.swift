@@ -26,6 +26,21 @@ struct WorkdaySpan: Codable, Identifiable {
     /// within this workday. Populated alongside `meetingMinutes`.
     var longestFocusBlockMinutes: Int? = nil
 
+    /// User-adjusted meeting/focus split, set by dragging the boundary
+    /// between the two segments on the day bar. Independent of start/end/
+    /// break, which stay fully automatic. Takes display precedence over
+    /// the calendar-derived `meetingMinutes` until reset to `nil`; the
+    /// calendar refresh keeps `meetingMinutes` itself up to date underneath
+    /// regardless, so clearing the override reverts to real calendar data.
+    var manualMeetingMinutes: Int? = nil
+
+    /// The meeting/focus split actually used for display: the manual
+    /// override if the user has dragged one, else the calendar-derived
+    /// value.
+    var displayMeetingMinutes: Int? {
+        manualMeetingMinutes ?? meetingMinutes
+    }
+
     /// Break minutes automatically detected from intra-day sleep/wake gaps
     /// in the pmset log (gaps >= 20 min but < the 8 h new-day threshold).
     /// Used for `effectiveHours` when no manual `breakMinutes` override is set.
@@ -71,17 +86,18 @@ struct WorkdaySpan: Codable, Identifiable {
         Int((hours * 60.0).rounded()) - Int(effectiveHours * 60.0)
     }
 
-    /// Focus minutes: effective minutes minus meeting time.
+    /// Focus minutes: effective minutes minus meeting time (using the
+    /// display-precedence split — manual override if set, else calendar).
     var focusMinutes: Int? {
-        guard let meeting = meetingMinutes else { return nil }
+        guard let meeting = displayMeetingMinutes else { return nil }
         let effectiveMinutes = Int(effectiveHours * 60.0)
         return max(0, effectiveMinutes - meeting)
     }
 
     /// Meeting fraction (0–1) relative to effective hours, or nil when
-    /// no calendar data is available.
+    /// no calendar data (and no manual override) is available.
     var meetingFraction: Double? {
-        guard let meeting = meetingMinutes else { return nil }
+        guard let meeting = displayMeetingMinutes else { return nil }
         let effectiveMinutes = Int(effectiveHours * 60.0)
         guard effectiveMinutes > 0 else { return nil }
         return Double(min(meeting, effectiveMinutes)) / Double(effectiveMinutes)
@@ -95,6 +111,7 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual: Bool = false,
         meetingMinutes: Int? = nil,
         longestFocusBlockMinutes: Int? = nil,
+        manualMeetingMinutes: Int? = nil,
         intraBreakMinutes: Int = 0,
         longestStretchMinutes: Int = 0,
         hasLunchBreak: Bool = false
@@ -106,6 +123,7 @@ struct WorkdaySpan: Codable, Identifiable {
         self.isManual = isManual
         self.meetingMinutes = meetingMinutes
         self.longestFocusBlockMinutes = longestFocusBlockMinutes
+        self.manualMeetingMinutes = manualMeetingMinutes
         self.intraBreakMinutes = intraBreakMinutes
         self.longestStretchMinutes = longestStretchMinutes
         self.hasLunchBreak = hasLunchBreak
@@ -120,6 +138,7 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual = try container.decodeIfPresent(Bool.self, forKey: .isManual) ?? false
         meetingMinutes = try container.decodeIfPresent(Int.self, forKey: .meetingMinutes)
         longestFocusBlockMinutes = try container.decodeIfPresent(Int.self, forKey: .longestFocusBlockMinutes)
+        manualMeetingMinutes = try container.decodeIfPresent(Int.self, forKey: .manualMeetingMinutes)
         intraBreakMinutes = try container.decodeIfPresent(Int.self, forKey: .intraBreakMinutes) ?? 0
         longestStretchMinutes = try container.decodeIfPresent(Int.self, forKey: .longestStretchMinutes) ?? 0
         hasLunchBreak = try container.decodeIfPresent(Bool.self, forKey: .hasLunchBreak) ?? false

@@ -35,10 +35,10 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
-                onSave: { day, start, end, breakMinutes in
-                    viewModel.setManualHours(for: day, start: start, end: end, breakMinutes: breakMinutes)
+                onMeetingSplitChange: { day, minutes in
+                    viewModel.setMeetingSplit(for: day, meetingMinutes: minutes)
                 },
-                onClear: { day in viewModel.clearManualHours(for: day) },
+                onResetMeetingSplit: { day in viewModel.resetMeetingSplit(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
         }
