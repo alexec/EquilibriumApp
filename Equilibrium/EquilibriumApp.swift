@@ -13,15 +13,16 @@ struct EquilibriumApp: App {
     }
 }
 
-/// Strips the title bar and traffic lights entirely, leaving a borderless
-/// window. The window is dragged via a WindowDragHandle placed in the
-/// content, since there's no title bar left to grab.
+/// Makes the title bar transparent and traffic-light-only (no title text),
+/// so the content reaches the window's edges while the standard
+/// close/minimize/zoom buttons remain visible and clickable in the corner.
+/// The window is dragged via its background, since there's no title text
+/// left to grab.
 private struct WindowChromeRemover: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
-            window.styleMask.remove(.titled)
             window.styleMask.insert(.resizable)
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
