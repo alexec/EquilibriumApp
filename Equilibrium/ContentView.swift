@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var viewModel = WorkHistoryViewModel()
+    @ObservedObject var viewModel: WorkHistoryViewModel
     @State private var showsAbout = false
 
     var body: some View {

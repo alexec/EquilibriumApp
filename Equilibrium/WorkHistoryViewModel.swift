@@ -121,4 +121,12 @@ final class WorkHistoryViewModel: ObservableObject {
             calendar: calendar
         )
     }
+
+    /// Hours worked this week subtracted from the 40-hour weekly target.
+    /// Positive means hours remain; negative means already over budget.
+    func remainingWeeklyHours() -> Double {
+        let week = currentWeekDays()
+        let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
+        return WorkloadRecommender.weeklyTargetHours - worked
+    }
 }
