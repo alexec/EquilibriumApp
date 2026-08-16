@@ -2,19 +2,27 @@ import SwiftUI
 
 /// Apple Health-style vertical bar chart: one pill-shaped bar per day from
 /// start-of-work to end-of-work time, scaled from 6am to midnight. Day
-/// columns stretch to fill the available width. Drag the boundary between
-/// a bar's focus (blue) and meeting (yellow) segments to adjust the split;
-/// hover a day to reveal Delete / Reset-split buttons.
+/// columns stretch to fill the available width. Each meeting is a
+/// real-time-positioned block you can drag by its top edge, bottom edge, or
+/// middle; hover a day to reveal Delete / Reset-meetings buttons.
 struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
+    /// The configured workday span (from `WorkPreferences`), passed through
+    /// to each day's `DayBar` for its "normal workday" track.
+    let workdayStartHour: Double
+    let workdayEndHour: Double
+    /// The configured weekly target (from `WorkPreferences`), used only for
+    /// the fallback week-header sentence's target comparison basis.
+    let weeklyTargetHours: Double
     /// LLM-generated "You worked ..." caption for the week starting on the
     /// given date, or nil if unavailable/not generated yet — in which case
     /// the deterministic `WeekHeaderStats.fallbackSentence` is shown instead.
     let aiWeekSummary: (Date) -> String?
-    let onMeetingSplitChange: (Date, Int) -> Void
-    let onResetMeetingSplit: (Date) -> Void
+    let onMeetingChange: (Date, UUID, Date, Date) -> Void
+    let onWorkdayChange: (Date, Date, Date) -> Void
+    let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
     @State private var hoveringDay: Date?
@@ -57,7 +65,7 @@ struct DailyBarChartView: View {
     /// built from the same `WeekHeaderStats`. Nil when the week has no
     /// data at all yet.
     private func weekHeaderLine(weekStart: Date, spans: [WorkdaySpan?]) -> String? {
-        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: spans) else { return nil }
+        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: spans, weeklyTargetHours: weeklyTargetHours) else { return nil }
         return aiWeekSummary(weekStart) ?? stats.fallbackSentence
     }
 
@@ -125,13 +133,21 @@ struct DailyBarChartView: View {
         return VStack(spacing: 2) {
             DayBar(
                 span: span,
+                day: day,
                 chartHeight: chartHeight,
                 isWeekend: isWeekend(day),
                 barWidth: Self.barWidth,
                 showsWorkdayTrack: true,
                 showsHoursLabel: true,
                 recommendedHours: recommendedHours(day),
-                onMeetingSplitChange: { minutes in onMeetingSplitChange(day, minutes) }
+                workdayStartHour: workdayStartHour,
+                workdayEndHour: workdayEndHour,
+                onMeetingChange: { meetingID, newStart, newEnd in
+                    onMeetingChange(day, meetingID, newStart, newEnd)
+                },
+                onWorkdayChange: { newStart, newEnd in
+                    onWorkdayChange(day, newStart, newEnd)
+                }
             )
             Text(weekdayLabel(day))
                 .font(.system(size: 11, weight: .medium))
@@ -140,16 +156,16 @@ struct DailyBarChartView: View {
                 .font(.system(size: 9, weight: .regular))
                 .foregroundColor(.secondary.opacity(0.7))
 
-            // Delete / Reset-split buttons, revealed on hover so the bar
+            // Delete / Reset-meetings buttons, revealed on hover so the bar
             // itself (only ~10pt wide) doesn't need to host them.
             HStack(spacing: 8) {
-                if span?.manualMeetingMinutes != nil {
+                if span?.meetingsManuallyEdited == true {
                     Button {
-                        onResetMeetingSplit(day)
+                        onResetMeetings(day)
                     } label: {
                         Image(systemName: "arrow.uturn.backward.circle")
                     }
-                    .help("Reset meeting/focus split to calendar data")
+                    .help("Reset meetings to calendar data")
                 }
                 if (span?.hours ?? 0) > 0 {
                     Button {

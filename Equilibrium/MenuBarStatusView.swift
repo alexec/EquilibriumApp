@@ -34,15 +34,15 @@ struct MenuBarStatusView: View {
 
     private var todayHoursText: String {
         let hours = viewModel.span(for: Date())?.effectiveHours ?? 0
-        return String(format: "%.1fh", hours)
+        return HoursFormat.string(hours)
     }
 
     private var remainingText: String {
         let remaining = viewModel.remainingWeeklyHours()
         if remaining >= 0 {
-            return String(format: "%.1fh", remaining)
+            return HoursFormat.string(remaining)
         } else {
-            return String(format: "+%.1fh", -remaining)
+            return "+\(HoursFormat.string(-remaining))"
         }
     }
 

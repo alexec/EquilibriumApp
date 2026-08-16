@@ -1,35 +1,63 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+
+/// An invisible NSView whose only job is telling AppKit not to treat a
+/// click here as "drag the window." SwiftUI gesture-priority tricks
+/// (`.highPriorityGesture`, `minimumDistance: 0`) weren't reliable against
+/// `window.isMovableByWindowBackground` (set in `WindowChromeRemover`,
+/// since the window has no title bar) — it kept winning the mouseDown race
+/// and dragging the whole window instead of resizing a capsule. This is
+/// the actual AppKit-level override: `mouseDownCanMoveWindow` is what
+/// `isMovableByWindowBackground` consults per-view before starting a
+/// window drag, so returning `false` here takes precedence over it,
+/// regardless of what SwiftUI's gesture recognizers are doing.
+private struct WindowDragBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { BlockerView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class BlockerView: NSView {
+        override var mouseDownCanMoveWindow: Bool { false }
+    }
+}
 #endif
 
 /// A single day's vertical bar: renders actual worked hours when present,
-/// otherwise a recommendation (or "over budget") placeholder.
+/// otherwise a recommendation (or "over budget") placeholder — or, for a
+/// day with no data at all yet, an empty column whose dashed track you can
+/// click to accept, or drag on to draw a custom span (see `WorkdayBlockView`).
 ///
-/// When calendar data (or a manual override) is available, the worked
-/// portion of the bar splits into two drag-resizable segments — Focus
-/// (blue, top) and Meeting (yellow, below it) — followed by a fixed Break
-/// segment (gray, bottom): whatever part of the span isn't meeting time and
-/// isn't focus time. Without calendar data there's just Focus/Break.
+/// The workday itself (Work capsule + Break capsule beneath it, sized by
+/// the auto-detected break — the one thing here without a precise time) is
+/// drag-editable the same three ways as a meeting: top edge = start,
+/// bottom edge = end, middle = move. Meetings (real calendar times) are
+/// drawn as separate yellow blocks on top, positioned at their actual
+/// times, each independently drag-editable the same way — see
+/// `MeetingBlockView`. There's no "focus" segment: it was always a derived
+/// guess (effective hours minus meetings), never a directly known quantity.
 struct DayBar: View {
     let span: WorkdaySpan?
+    /// The calendar day this bar represents — needed to construct a
+    /// brand-new span (with real dates, not just hour-of-day) when the
+    /// user draws one on a day with no data yet.
+    let day: Date
     let chartHeight: CGFloat
     let isWeekend: Bool
     let barWidth: CGFloat
     let showsWorkdayTrack: Bool
     let showsHoursLabel: Bool
     let recommendedHours: Double?
-    /// Called with the new meeting-minute value while the focus/meeting
-    /// boundary is being dragged, and again with the final value on release.
-    var onMeetingSplitChange: (Int) -> Void = { _ in }
-
-    @State private var dragTranslation: CGFloat = 0
-    @State private var isDragging = false
-    @State private var isPulsingHigh = false
-
-    private static let focusColor = Color.blue
-    private static let meetingColor = Color.yellow
-    private static let breakColor = Color.gray.opacity(0.55)
+    /// The configured workday span (from `WorkPreferences`), used to
+    /// position the dashed "normal workday" track.
+    let workdayStartHour: Double
+    let workdayEndHour: Double
+    /// Called with a meeting's id and its new (start, end) once a drag
+    /// (resize-top, resize-bottom, or move) ends.
+    var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
+    /// Called with the day's new (start, end) once a drag on the workday
+    /// itself ends — whether resizing/moving an existing day or drawing a
+    /// brand new one from scratch.
+    var onWorkdayChange: (Date, Date) -> Void = { _, _ in }
 
     private var calendar: Calendar { .current }
 
@@ -55,21 +83,38 @@ struct DayBar: View {
         recommendedHours != nil && !(span.map { $0.hours > 0 } ?? false)
     }
 
+    /// The dashed track's start/end hours when this day is empty and a
+    /// track is visible — what a click on that capsule should create.
+    /// Nil when there's already real data, weekends, or no positive
+    /// height to accept (over budget / zero recommendation).
+    private var suggestedTrackHours: (start: Double, end: Double)? {
+        guard !(span.map { $0.hours > 0 } ?? false) else { return nil }
+        guard showsWorkdayTrack && !isWeekend else { return nil }
+        if showsRecommendation, let recommendedHours {
+            guard recommendedHours > 0 else { return nil }
+            let end = (workdayStartHour + recommendedHours)
+                .clamped(to: ChartScale.startHour...ChartScale.endHour)
+            return (workdayStartHour, end)
+        }
+        return (workdayStartHour, workdayEndHour)
+    }
+
     var body: some View {
-        let workdayTop = CGFloat(ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+        let workdayTop = CGFloat(ChartScale.fraction(of: workdayStartHour)) * chartHeight
         let isOverBudget = showsRecommendation && (recommendedHours ?? 0) < 0
 
-        // The workday track normally spans 9am-5pm, but when there's no real
-        // data yet and a recommendation exists, its height instead reflects
-        // the recommended hours (anchored at 9am), so the recommendation and
-        // "normal workday" indicator share one visual element. A negative
-        // recommendation (already over budget) has no positive height to draw.
+        // The workday track normally spans the configured workday, but when
+        // there's no real data yet and a recommendation exists, its height
+        // instead reflects the recommended hours (anchored at the
+        // configured start), so the recommendation and "normal workday"
+        // indicator share one visual element. A negative recommendation
+        // (already over budget) has no positive height to draw.
         let workdayHeight: CGFloat = {
             if showsRecommendation, let recommendedHours, recommendedHours > 0 {
-                let recEndHour = (ChartScale.workdayStartHour + recommendedHours).clamped(to: ChartScale.startHour...ChartScale.endHour)
-                return CGFloat(ChartScale.fraction(of: recEndHour) - ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+                let recEndHour = (workdayStartHour + recommendedHours).clamped(to: ChartScale.startHour...ChartScale.endHour)
+                return CGFloat(ChartScale.fraction(of: recEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
             }
-            return CGFloat(ChartScale.fraction(of: ChartScale.workdayEndHour) - ChartScale.fraction(of: ChartScale.workdayStartHour)) * chartHeight
+            return CGFloat(ChartScale.fraction(of: workdayEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
         }()
 
         ZStack(alignment: .top) {
@@ -102,131 +147,482 @@ struct DayBar: View {
                 }
             }
 
-            if let span, span.hours > 0 {
-                daySegments(span: span)
+            WorkdayBlockView(
+                span: span,
+                day: day,
+                chartHeight: chartHeight,
+                barWidth: barWidth,
+                isWeekend: isWeekend,
+                // Match the dashed track the user sees: recommended hours when
+                // one exists, otherwise the configured workday. A click on that
+                // empty capsule places a real span there (see emptyDayView).
+                suggestedStartHour: suggestedTrackHours?.start,
+                suggestedEndHour: suggestedTrackHours?.end,
+                onChange: onWorkdayChange
+            )
 
-                if showsHoursLabel {
-                    let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-                    let topOffset = CGFloat(startFrac) * chartHeight
-                    let isOver = span.roundedUpHours > 8
-                    Text(hoursLabel(span))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(isOver ? .red : .secondary)
-                        .fixedSize()
-                        .offset(y: topOffset - 13)
+            // Meetings render even on days with no work capsule yet (future
+            // week days get a 0h span that only holds calendar blocks).
+            if let span, !span.meetings.isEmpty {
+                let (clampStart, clampEnd) = meetingClampBounds(for: span, day: day)
+                ForEach(span.meetings) { meeting in
+                    MeetingBlockView(
+                        meeting: meeting,
+                        chartHeight: chartHeight,
+                        barWidth: barWidth,
+                        dayStart: clampStart,
+                        dayEnd: clampEnd,
+                        onChange: { newStart, newEnd in
+                            onMeetingChange(meeting.id, newStart, newEnd)
+                        }
+                    )
                 }
+            }
+
+            if let span, span.hours > 0, showsHoursLabel {
+                let startFrac = ChartScale.fraction(of: hourFraction(span.start))
+                let topOffset = CGFloat(startFrac) * chartHeight
+                let isFiery = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend) > 0
+                Text(hoursLabel(span))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(isFiery ? .red : .secondary)
+                    .fixedSize()
+                    .offset(y: topOffset - 13)
             }
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
     }
 
-    /// The stacked Focus/Meeting/Break capsules for a day with real hours,
-    /// plus the drag handle on the Focus/Meeting boundary when a split
-    /// (calendar-derived or manually overridden) is available to adjust.
+    /// Drag bounds for meetings: the workday when present, otherwise the
+    /// chart's 6am–midnight window so future-day meetings stay editable.
+    private func meetingClampBounds(for span: WorkdaySpan, day: Date) -> (Date, Date) {
+        if span.hours > 0 {
+            return (span.start, span.end)
+        }
+        let startOfDay = calendar.startOfDay(for: day)
+        let start = calendar.date(
+            bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: startOfDay
+        ) ?? startOfDay
+        let end = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
+        return (start, end)
+    }
+}
+
+/// A single meeting, drawn at its real start/end time and drag-editable
+/// like an event in a calendar day view. Blocks longer than 2h support
+/// three-way edit (top = start, bottom = end, middle = move). Short
+/// blocks (≤2h) are resize-only — top half moves `start`, bottom half
+/// moves `end` — since there's no room for a distinct move strip.
+private struct MeetingBlockView: View {
+    let meeting: MeetingBlock
+    let chartHeight: CGFloat
+    let barWidth: CGFloat
+    let dayStart: Date
+    let dayEnd: Date
+    let onChange: (Date, Date) -> Void
+
+    private enum DragMode {
+        case moveWhole, resizeTop, resizeBottom
+    }
+
+    @State private var dragMode: DragMode?
+    @State private var dragPointsDelta: CGFloat = 0
+
+    private static let edgeHandleHeight: CGFloat = 6
+    private static let minBlockHeight: CGFloat = 6
+    /// Meetings at or under this duration skip the middle move handle and
+    /// split the whole block into top/bottom resize halves.
+    private static let resizeOnlyMaxHours: Double = 2
+
+    private var secondsPerPoint: Double {
+        ChartScale.secondsPerPoint(chartHeight: chartHeight)
+    }
+
+    private var isResizeOnly: Bool {
+        meeting.end.timeIntervalSince(meeting.start) <= Self.resizeOnlyMaxHours * 3600
+    }
+
+    private var displayedStart: Date {
+        guard dragMode == .resizeTop || dragMode == .moveWhole else { return meeting.start }
+        let candidate = meeting.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        return min(max(candidate, dayStart), dayEnd)
+    }
+
+    private var displayedEnd: Date {
+        guard dragMode == .resizeBottom || dragMode == .moveWhole else { return meeting.end }
+        let candidate = meeting.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        return min(max(candidate, dayStart), dayEnd)
+    }
+
+    var body: some View {
+        let topOffset = CGFloat(ChartScale.fraction(of: displayedStart)) * chartHeight
+        let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd)) * chartHeight
+        let height = max(bottomOffset - topOffset, Self.minBlockHeight)
+
+        ZStack(alignment: .top) {
+            Capsule()
+                .fill(Color.yellow)
+                .frame(width: barWidth, height: height)
+
+            if isResizeOnly {
+                let half = height / 2
+                dragHandle(mode: .resizeTop, height: half)
+                dragHandle(mode: .resizeBottom, height: half)
+                    .offset(y: half)
+            } else {
+                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight)
+                dragHandle(mode: .moveWhole, height: height - 2 * Self.edgeHandleHeight)
+                    .offset(y: Self.edgeHandleHeight)
+                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight)
+                    .offset(y: height - Self.edgeHandleHeight)
+            }
+        }
+        .frame(width: barWidth, height: height, alignment: .top)
+        .offset(y: topOffset)
+    }
+
+    private func dragHandle(mode: DragMode, height: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: max(height, 1))
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        dragMode = mode
+                        dragPointsDelta = value.translation.height
+                    }
+                    .onEnded { value in
+                        let delta = Double(value.translation.height) * secondsPerPoint
+                        var finalStart = meeting.start
+                        var finalEnd = meeting.end
+                        switch mode {
+                        case .moveWhole:
+                            finalStart = meeting.start.addingTimeInterval(delta)
+                            finalEnd = meeting.end.addingTimeInterval(delta)
+                        case .resizeTop:
+                            finalStart = meeting.start.addingTimeInterval(delta)
+                        case .resizeBottom:
+                            finalEnd = meeting.end.addingTimeInterval(delta)
+                        }
+                        finalStart = min(max(finalStart, dayStart), dayEnd)
+                        finalEnd = min(max(finalEnd, dayStart), dayEnd)
+
+                        dragMode = nil
+                        dragPointsDelta = 0
+
+                        let snappedStart = snap(finalStart)
+                        let snappedEnd = snap(finalEnd)
+                        if snappedStart < snappedEnd {
+                            onChange(snappedStart, snappedEnd)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering {
+                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            #endif
+    }
+
+    /// Rounds to the nearest 5 minutes.
+    private func snap(_ date: Date) -> Date {
+        let interval: TimeInterval = 5 * 60
+        let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
+        return Date(timeIntervalSinceReferenceDate: rounded)
+    }
+}
+
+/// Heat for a "fiery" day — shades of red once you're over the balanced
+/// 8h line (or working a weekend). 0 = calm gray; 1 = full red.
+private enum DayFire {
+    static let balancedHours = 8
+
+    /// 0 under the line; ramps 9→0.25 … 12+→1. Any weekend work is full fire.
+    static func intensity(hours: Int, isWeekend: Bool) -> Double {
+        if isWeekend, hours > 0 { return 1 }
+        guard hours > balancedHours else { return 0 }
+        return min(Double(hours - balancedHours) / 4.0, 1.0)
+    }
+
+    /// Work capsule: gray at 0, soft orange-red → deep red as intensity climbs.
+    static func workColor(intensity: Double) -> Color {
+        guard intensity > 0 else { return .gray }
+        let green = 0.42 - intensity * 0.32
+        let blue = 0.22 - intensity * 0.14
+        return Color(red: 0.90, green: green, blue: blue)
+    }
+
+    /// Break capsule: a lighter shade of the same fire.
+    static func breakColor(intensity: Double) -> Color {
+        guard intensity > 0 else { return Color.gray.opacity(0.35) }
+        return workColor(intensity: intensity).opacity(0.40)
+    }
+}
+
+/// The workday itself: Work + Break capsules for a day that already has
+/// data, drag-editable the same three ways as a meeting block (top edge =
+/// start, bottom edge = end, middle = move); or, for a day with no data at
+/// all yet, click the dashed track to accept those hours, or click-and-drag
+/// anywhere in the column to draw a brand-new span from scratch — like
+/// dragging out a new event in a calendar day view (order-independent:
+/// drag up or down, whichever end you started from).
+private struct WorkdayBlockView: View {
+    let span: WorkdaySpan?
+    let day: Date
+    let chartHeight: CGFloat
+    let barWidth: CGFloat
+    let isWeekend: Bool
+    /// Hours matching the visible dashed track; a tap inside that region
+    /// creates a span at these times instead of requiring a draw-drag.
+    let suggestedStartHour: Double?
+    let suggestedEndHour: Double?
+    let onChange: (Date, Date) -> Void
+
+    private enum DragMode {
+        case moveWhole, resizeTop, resizeBottom
+    }
+
+    @State private var dragMode: DragMode?
+    @State private var dragPointsDelta: CGFloat = 0
+
+    @State private var drawStartY: CGFloat?
+    @State private var drawCurrentY: CGFloat?
+
+    private static let edgeHandleHeight: CGFloat = 8
+    private static let splitThreshold: CGFloat = 24
+    /// Movement below this (in points) counts as a click, not a draw.
+    private static let tapSlop: CGFloat = 4
+    private static let drawColor = Color.gray.opacity(0.5)
+
+    private var secondsPerPoint: Double {
+        ChartScale.secondsPerPoint(chartHeight: chartHeight)
+    }
+
+    var body: some View {
+        if let span, span.hours > 0 {
+            existingSpanView(span: span)
+        } else {
+            emptyDayView()
+        }
+    }
+
+    // MARK: - Existing span: three-way edit
+
     @ViewBuilder
-    private func daySegments(span: WorkdaySpan) -> some View {
-        let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-        let endFrac = ChartScale.fraction(of: hourFraction(span.end))
+    private func existingSpanView(span: WorkdaySpan) -> some View {
+        let liveStart: Date = {
+            guard dragMode == .resizeTop || dragMode == .moveWhole else { return span.start }
+            return span.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        }()
+        let liveEnd: Date = {
+            guard dragMode == .resizeBottom || dragMode == .moveWhole else { return span.end }
+            return span.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
+        }()
+
+        let startFrac = ChartScale.fraction(of: liveStart)
+        let endFrac = ChartScale.fraction(of: liveEnd)
         let topOffset = CGFloat(startFrac) * chartHeight
         let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
 
-        // Worked portion (focus + meeting) vs. break, in points.
         let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
         let workedHeight = barHeight * workedFraction
         let breakHeight = max(barHeight - workedHeight, 0)
+        let canSplitHandles = barHeight >= Self.splitThreshold
 
-        // Live-dragged meeting height, clamped within the worked region.
-        let baseMeetingFraction = CGFloat(span.meetingFraction ?? 0)
-        let baseMeetingHeight = workedHeight * baseMeetingFraction
-        let meetingHeight: CGFloat = {
-            guard span.meetingFraction != nil else { return 0 }
-            let raw = isDragging ? (baseMeetingHeight - dragTranslation) : baseMeetingHeight
-            return min(max(raw, 0), workedHeight)
-        }()
-        let focusHeight = max(workedHeight - meetingHeight, 0)
-
-        let isOver8h = span.roundedUpHours > 8
+        let fire = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
+        let workColor = DayFire.workColor(intensity: fire)
+        let breakColor = DayFire.breakColor(intensity: fire)
 
         ZStack(alignment: .top) {
-            if focusHeight > 0 {
+            if workedHeight > 0 {
                 Capsule()
-                    .fill(Self.focusColor)
-                    .frame(width: barWidth, height: max(focusHeight, barWidth / 2))
-            }
-            if meetingHeight > 0 {
-                Capsule()
-                    .fill(Self.meetingColor)
-                    .frame(width: barWidth, height: max(meetingHeight, barWidth / 2))
-                    .offset(y: focusHeight)
+                    .fill(workColor)
+                    .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
             }
             if breakHeight > 0 {
                 Capsule()
-                    .fill(Self.breakColor)
+                    .fill(breakColor)
                     .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
-                    .offset(y: focusHeight + meetingHeight)
+                    .offset(y: workedHeight)
+            }
+
+            if canSplitHandles {
+                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight, span: span)
+                dragHandle(mode: .moveWhole, height: barHeight - 2 * Self.edgeHandleHeight, span: span)
+                    .offset(y: Self.edgeHandleHeight)
+                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight, span: span)
+                    .offset(y: barHeight - Self.edgeHandleHeight)
+            } else {
+                dragHandle(mode: .moveWhole, height: barHeight, span: span)
             }
         }
         .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-        // A slowly pulsing red outline around the whole stack signals >8h
-        // without giving up the segment fill colors to a 4th "over budget"
-        // color. Pulsing (vs. a static outline) reads more clearly as "this
-        // needs attention" rather than just another fixed color in the mix.
-        .overlay(
-            Group {
-                if isOver8h {
-                    Capsule()
-                        .stroke(Color.red, lineWidth: 1.5)
-                        .frame(width: barWidth, height: max(barHeight, barWidth))
-                        .opacity(isPulsingHigh ? 1.0 : 0.25)
-                        .onAppear {
-                            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                                isPulsingHigh = true
-                            }
-                        }
-                }
-            }
-        )
-        .overlay(
-            // Invisible, wide drag surface covering the whole bar — not just
-            // a thin strip on the boundary — so a drag started anywhere on
-            // the visible capsules is captured by this gesture rather than
-            // falling through to the window's isMovableByWindowBackground,
-            // which otherwise wins the mouseDown and drags the whole window.
-            // minimumDistance: 0 claims the touch immediately for the same
-            // reason: any delay lets the window-drag get there first.
-            Group {
-                if span.meetingFraction != nil, workedHeight > 0 {
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(width: barWidth + 20, height: max(barHeight, barWidth))
-                        .contentShape(Rectangle())
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    isDragging = true
-                                    dragTranslation = value.translation.height
-                                }
-                                .onEnded { value in
-                                    let effectiveMinutes = Int(span.effectiveHours * 60.0)
-                                    let finalMeetingHeight = min(max(baseMeetingHeight - value.translation.height, 0), workedHeight)
-                                    let finalFraction = workedHeight > 0 ? Double(finalMeetingHeight / workedHeight) : 0
-                                    // Snap to the nearest 5 minutes.
-                                    let rawMinutes = Int((finalFraction * Double(effectiveMinutes)).rounded())
-                                    let snapped = (rawMinutes / 5) * 5
-                                    isDragging = false
-                                    dragTranslation = 0
-                                    onMeetingSplitChange(snapped)
-                                }
-                        )
-                        #if os(macOS)
-                        .onHover { hovering in
-                            if hovering { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-                        }
-                        #endif
-                }
-            }
-        )
         .offset(y: topOffset)
+    }
+
+    private func dragHandle(mode: DragMode, height: CGFloat, span: WorkdaySpan) -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: max(height, 1))
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        dragMode = mode
+                        dragPointsDelta = value.translation.height
+                    }
+                    .onEnded { value in
+                        let delta = Double(value.translation.height) * secondsPerPoint
+                        var finalStart = span.start
+                        var finalEnd = span.end
+                        switch mode {
+                        case .moveWhole:
+                            finalStart = span.start.addingTimeInterval(delta)
+                            finalEnd = span.end.addingTimeInterval(delta)
+                        case .resizeTop:
+                            finalStart = span.start.addingTimeInterval(delta)
+                        case .resizeBottom:
+                            finalEnd = span.end.addingTimeInterval(delta)
+                        }
+                        dragMode = nil
+                        dragPointsDelta = 0
+
+                        let snappedStart = snap(finalStart)
+                        let snappedEnd = snap(finalEnd)
+                        if snappedStart < snappedEnd {
+                            onChange(snappedStart, snappedEnd)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering {
+                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            #endif
+    }
+
+    // MARK: - Empty day: accept suggestion or draw a new one
+
+    /// Y-range of the dashed track inside this column, if one is suggested.
+    private var suggestedTrackYRange: ClosedRange<CGFloat>? {
+        guard let startHour = suggestedStartHour, let endHour = suggestedEndHour,
+              endHour > startHour else { return nil }
+        let top = CGFloat(ChartScale.fraction(of: startHour)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: endHour)) * chartHeight
+        return top...max(bottom, top + barWidth)
+    }
+
+    @ViewBuilder
+    private func emptyDayView() -> some View {
+        Rectangle()
+            .fill(Color.clear)
+            .frame(width: barWidth + 20, height: chartHeight)
+            .contentShape(Rectangle())
+            #if os(macOS)
+            .background(WindowDragBlocker())
+            #endif
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        // Don't show a draw preview for a plain click on the
+                        // suggested track — that resolves to "accept" on end.
+                        if abs(value.translation.height) < Self.tapSlop,
+                           let range = suggestedTrackYRange,
+                           range.contains(value.startLocation.y) {
+                            return
+                        }
+                        if drawStartY == nil { drawStartY = value.startLocation.y }
+                        drawCurrentY = value.location.y
+                    }
+                    .onEnded { value in
+                        defer {
+                            drawStartY = nil
+                            drawCurrentY = nil
+                        }
+
+                        let isTap = abs(value.translation.height) < Self.tapSlop
+
+                        // Click on the empty dotted capsule → place a real
+                        // span at those suggested hours.
+                        if isTap,
+                           let startHour = suggestedStartHour,
+                           let endHour = suggestedEndHour,
+                           let range = suggestedTrackYRange,
+                           range.contains(value.startLocation.y) {
+                            let a = snap(date(atHour: startHour))
+                            let b = snap(date(atHour: endHour))
+                            if a < b { onChange(a, b) }
+                            return
+                        }
+
+                        // A plain click elsewhere does nothing; only a real
+                        // drag draws a custom span.
+                        guard !isTap else { return }
+                        guard let startY = drawStartY ?? Optional(value.startLocation.y) else { return }
+                        let endY = value.location.y
+                        let a = date(atY: min(startY, endY))
+                        let b = date(atY: max(startY, endY))
+
+                        let snappedA = snap(a)
+                        let snappedB = snap(b)
+                        if snappedA < snappedB {
+                            onChange(snappedA, snappedB)
+                        }
+                    }
+            )
+            #if os(macOS)
+            .onHover { hovering in
+                if hovering { NSCursor.crosshair.push() } else { NSCursor.pop() }
+            }
+            #endif
+            .overlay(
+                Group {
+                    if let startY = drawStartY, let currentY = drawCurrentY {
+                        let top = min(startY, currentY)
+                        let height = max(abs(currentY - startY), barWidth / 2)
+                        Capsule()
+                            .fill(Self.drawColor)
+                            .frame(width: barWidth, height: height)
+                            .offset(y: top)
+                            .allowsHitTesting(false)
+                    }
+                }
+            )
+    }
+
+    /// Converts a raw Y position within `chartHeight` into a real `Date` on
+    /// `day`, via `ChartScale`'s inverse mapping.
+    private func date(atY y: CGFloat) -> Date {
+        date(atHour: ChartScale.hour(atFraction: chartHeight > 0 ? Double(y / chartHeight) : 0))
+    }
+
+    private func date(atHour hour: Double) -> Date {
+        let hourInt = Int(hour)
+        let minuteInt = Int((hour - Double(hourInt)) * 60)
+        return Calendar.current.date(bySettingHour: hourInt, minute: minuteInt, second: 0, of: day) ?? day
+    }
+
+    /// Rounds to the nearest 15 minutes — coarser than a meeting's 5, since
+    /// this is setting the whole workday.
+    private func snap(_ date: Date) -> Date {
+        let interval: TimeInterval = 15 * 60
+        let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
+        return Date(timeIntervalSinceReferenceDate: rounded)
     }
 }

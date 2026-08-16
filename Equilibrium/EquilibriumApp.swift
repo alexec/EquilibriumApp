@@ -12,6 +12,27 @@ struct EquilibriumApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            // Replaces the default "About Equilibrium" item with one that
+            // opens the standard panel but with our "why I built this"
+            // story as its credits text, instead of a custom in-window
+            // popover living behind a "?" button.
+            CommandGroup(replacing: .appInfo) {
+                Button("About Equilibrium") {
+                    NSApp.orderFrontStandardAboutPanel(
+                        options: [
+                            NSApplication.AboutPanelOptionKey.credits: NSAttributedString(
+                                string: AboutStory.text,
+                                attributes: [
+                                    .font: NSFont.systemFont(ofSize: 11),
+                                    .foregroundColor: NSColor.secondaryLabelColor,
+                                ]
+                            )
+                        ]
+                    )
+                }
+            }
+        }
 
         MenuBarExtra {
             MenuBarStatusView(viewModel: viewModel)
@@ -30,10 +51,10 @@ private struct MenuBarLabel: View {
         let today = viewModel.span(for: Date())?.effectiveHours ?? 0
         let remaining = viewModel.remainingWeeklyHours()
 
-        let todayText = String(format: "%.1fh", today)
+        let todayText = HoursFormat.string(today)
         let remainingText = remaining >= 0
-            ? String(format: "%.1fh left", remaining)
-            : String(format: "+%.1fh", -remaining)
+            ? "\(HoursFormat.string(remaining)) left"
+            : "+\(HoursFormat.string(-remaining))"
 
         Text("\(todayText)  \(remainingText)")
             .font(.system(size: 12, weight: .medium, design: .rounded))

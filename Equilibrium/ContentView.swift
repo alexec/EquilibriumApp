@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
-    @State private var showsAbout = false
+    @State private var showsPreferences = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -13,14 +13,17 @@ struct ContentView: View {
                 }
                 Spacer()
                 Button {
-                    showsAbout = true
+                    showsPreferences = true
                 } label: {
-                    Image(systemName: "questionmark.circle")
+                    Image(systemName: "gearshape")
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .popover(isPresented: $showsAbout) {
-                    AboutPopover()
+                .popover(isPresented: $showsPreferences) {
+                    PreferencesView(current: viewModel.preferences) { updated in
+                        viewModel.updatePreferences(updated)
+                        showsPreferences = false
+                    }
                 }
             }
 
@@ -28,11 +31,17 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
+                workdayStartHour: viewModel.preferences.workdayStartHour,
+                workdayEndHour: viewModel.preferences.workdayEndHour,
+                weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
-                onMeetingSplitChange: { day, minutes in
-                    viewModel.setMeetingSplit(for: day, meetingMinutes: minutes)
+                onMeetingChange: { day, meetingID, newStart, newEnd in
+                    viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
-                onResetMeetingSplit: { day in viewModel.resetMeetingSplit(for: day) },
+                onWorkdayChange: { day, newStart, newEnd in
+                    viewModel.updateWorkday(for: day, newStart: newStart, newEnd: newEnd)
+                },
+                onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
         }

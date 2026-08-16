@@ -1,11 +1,33 @@
 import Foundation
 
+/// A single calendar meeting, with its own real start/end time within the
+/// workday — as opposed to the old `meetingMinutes: Int?` aggregate, this
+/// preserves *when* each meeting happened, which is what makes it possible
+/// to draw and drag individual blocks. Overlapping/back-to-back calendar
+/// events are merged into one `MeetingBlock` before being stored (see
+/// `MeetingCalculator`); a block can also be created or reshaped entirely
+/// by hand.
+struct MeetingBlock: Codable, Identifiable, Equatable {
+    let id: UUID
+    var start: Date
+    var end: Date
+
+    init(id: UUID = UUID(), start: Date, end: Date) {
+        self.id = id
+        self.start = start
+        self.end = end
+    }
+}
+
 /// A single contiguous work block for one calendar day.
 struct WorkdaySpan: Codable, Identifiable {
     var id: String { dayKey }
     let dayKey: String // "yyyy-MM-dd" in local time
-    let start: Date
-    let end: Date
+    /// Mutable (unlike the historical wake/sleep-derived fields) since the
+    /// whole workday span is now directly drag-editable — see
+    /// `WorkHistoryViewModel.updateWorkday(for:newStart:newEnd:)`.
+    var start: Date
+    var end: Date
 
     /// Minutes subtracted from worked hours for breaks (lunch, etc.), always
     /// a multiple of 30. Always 0 for automatically-detected spans; only
@@ -16,30 +38,25 @@ struct WorkdaySpan: Codable, Identifiable {
     /// wake/sleep detection must never overwrite it.
     var isManual: Bool = false
 
-    /// Total minutes of calendar meeting time within this workday (all-day
-    /// and free events excluded). Populated from EventKit after calendar
-    /// permission is granted; nil when permission is denied or not yet
-    /// determined.
-    var meetingMinutes: Int? = nil
+    /// This workday's meetings, each with its own real start/end time.
+    /// Populated from EventKit once calendar permission is granted: clipped
+    /// to `start...end` for days with a real work span, or full-day for
+    /// future week days that only hold calendar blocks so far. Empty may
+    /// mean "no calendar access yet" or "genuinely zero meetings" — see
+    /// `hasCalendarData` for which.
+    var meetings: [MeetingBlock] = []
 
-    /// Length (in minutes) of the longest contiguous meeting-free block
-    /// within this workday. Populated alongside `meetingMinutes`.
-    var longestFocusBlockMinutes: Int? = nil
+    /// Whether this day's calendar has actually been checked — distinct
+    /// from `meetings.isEmpty`, which could mean either "not checked yet"
+    /// or "checked, zero meetings." Set once `refreshMeetingData()`
+    /// processes this day.
+    var hasCalendarData: Bool = false
 
-    /// User-adjusted meeting/focus split, set by dragging the boundary
-    /// between the two segments on the day bar. Independent of start/end/
-    /// break, which stay fully automatic. Takes display precedence over
-    /// the calendar-derived `meetingMinutes` until reset to `nil`; the
-    /// calendar refresh keeps `meetingMinutes` itself up to date underneath
-    /// regardless, so clearing the override reverts to real calendar data.
-    var manualMeetingMinutes: Int? = nil
-
-    /// The meeting/focus split actually used for display: the manual
-    /// override if the user has dragged one, else the calendar-derived
-    /// value.
-    var displayMeetingMinutes: Int? {
-        manualMeetingMinutes ?? meetingMinutes
-    }
+    /// True once any meeting on this day has been hand-dragged (resized or
+    /// moved). While true, calendar refreshes leave `meetings` alone
+    /// rather than overwriting your edits — see `WorkHistoryViewModel`'s
+    /// `updateMeeting`/`resetMeetings`.
+    var meetingsManuallyEdited: Bool = false
 
     /// Break minutes automatically detected from intra-day sleep/wake gaps
     /// in the pmset log (gaps >= 20 min but < the 8 h new-day threshold).
@@ -62,7 +79,7 @@ struct WorkdaySpan: Codable, Identifiable {
     }
 
     /// Worked hours after subtracting breaks — used for the displayed hour
-    /// count and the over/under-8h color, since breaks aren't worked time.
+    /// count and fiery-day intensity, since breaks aren't worked time.
     /// If the user has set a manual `breakMinutes` override, that takes
     /// precedence; otherwise auto-detected `intraBreakMinutes` is used.
     var effectiveHours: Double {
@@ -77,30 +94,21 @@ struct WorkdaySpan: Codable, Identifiable {
     }
 
     /// Minutes of this span not counted as worked time — i.e. `hours` minus
-    /// `effectiveHours`. This is the same deduction `effectiveHours` already
-    /// applies (manual `breakMinutes` if set, else auto-detected
-    /// `intraBreakMinutes`); exposed here as its own quantity because it's
-    /// also how "break" is defined for display: whatever time in the span
-    /// isn't meeting time and isn't focus time.
+    /// `effectiveHours`.
     var breakMinutesUsed: Int {
         Int((hours * 60.0).rounded()) - Int(effectiveHours * 60.0)
     }
 
-    /// Focus minutes: effective minutes minus meeting time (using the
-    /// display-precedence split — manual override if set, else calendar).
-    var focusMinutes: Int? {
-        guard let meeting = displayMeetingMinutes else { return nil }
-        let effectiveMinutes = Int(effectiveHours * 60.0)
-        return max(0, effectiveMinutes - meeting)
-    }
-
-    /// Meeting fraction (0–1) relative to effective hours, or nil when
-    /// no calendar data (and no manual override) is available.
-    var meetingFraction: Double? {
-        guard let meeting = displayMeetingMinutes else { return nil }
-        let effectiveMinutes = Int(effectiveHours * 60.0)
-        guard effectiveMinutes > 0 else { return nil }
-        return Double(min(meeting, effectiveMinutes)) / Double(effectiveMinutes)
+    /// Total minutes across all meetings, clamped to this span's bounds
+    /// (meetings are already expected to arrive pre-clipped, but this
+    /// guards against a hand-dragged block being pulled outside it).
+    var meetingMinutes: Int {
+        meetings.reduce(0) { total, meeting in
+            let clippedStart = max(meeting.start, start)
+            let clippedEnd = min(meeting.end, end)
+            guard clippedStart < clippedEnd else { return total }
+            return total + Int(clippedEnd.timeIntervalSince(clippedStart) / 60.0)
+        }
     }
 
     init(
@@ -109,9 +117,9 @@ struct WorkdaySpan: Codable, Identifiable {
         end: Date,
         breakMinutes: Int = 0,
         isManual: Bool = false,
-        meetingMinutes: Int? = nil,
-        longestFocusBlockMinutes: Int? = nil,
-        manualMeetingMinutes: Int? = nil,
+        meetings: [MeetingBlock] = [],
+        hasCalendarData: Bool = false,
+        meetingsManuallyEdited: Bool = false,
         intraBreakMinutes: Int = 0,
         longestStretchMinutes: Int = 0,
         hasLunchBreak: Bool = false
@@ -121,9 +129,9 @@ struct WorkdaySpan: Codable, Identifiable {
         self.end = end
         self.breakMinutes = breakMinutes
         self.isManual = isManual
-        self.meetingMinutes = meetingMinutes
-        self.longestFocusBlockMinutes = longestFocusBlockMinutes
-        self.manualMeetingMinutes = manualMeetingMinutes
+        self.meetings = meetings
+        self.hasCalendarData = hasCalendarData
+        self.meetingsManuallyEdited = meetingsManuallyEdited
         self.intraBreakMinutes = intraBreakMinutes
         self.longestStretchMinutes = longestStretchMinutes
         self.hasLunchBreak = hasLunchBreak
@@ -136,9 +144,9 @@ struct WorkdaySpan: Codable, Identifiable {
         end = try container.decode(Date.self, forKey: .end)
         breakMinutes = try container.decodeIfPresent(Int.self, forKey: .breakMinutes) ?? 0
         isManual = try container.decodeIfPresent(Bool.self, forKey: .isManual) ?? false
-        meetingMinutes = try container.decodeIfPresent(Int.self, forKey: .meetingMinutes)
-        longestFocusBlockMinutes = try container.decodeIfPresent(Int.self, forKey: .longestFocusBlockMinutes)
-        manualMeetingMinutes = try container.decodeIfPresent(Int.self, forKey: .manualMeetingMinutes)
+        meetings = try container.decodeIfPresent([MeetingBlock].self, forKey: .meetings) ?? []
+        hasCalendarData = try container.decodeIfPresent(Bool.self, forKey: .hasCalendarData) ?? false
+        meetingsManuallyEdited = try container.decodeIfPresent(Bool.self, forKey: .meetingsManuallyEdited) ?? false
         intraBreakMinutes = try container.decodeIfPresent(Int.self, forKey: .intraBreakMinutes) ?? 0
         longestStretchMinutes = try container.decodeIfPresent(Int.self, forKey: .longestStretchMinutes) ?? 0
         hasLunchBreak = try container.decodeIfPresent(Bool.self, forKey: .hasLunchBreak) ?? false

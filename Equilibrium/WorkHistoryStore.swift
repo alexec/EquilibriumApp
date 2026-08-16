@@ -34,10 +34,17 @@ final class WorkHistoryStore {
             if stored[span.dayKey]?.isManual == true { continue }
             if span.dayKey == today || span.dayKey == yesterday || stored[span.dayKey] == nil {
                 var newSpan = span
-                // A manual meeting/focus split (dragged on the bar) survives
-                // the automatic recompute — only start/end/break come from
-                // the fresh wake-data pass.
-                newSpan.manualMeetingMinutes = stored[span.dayKey]?.manualMeetingMinutes
+                // Hand-dragged meetings survive the automatic recompute —
+                // only start/end/break come from the fresh wake-data pass.
+                // (refreshMeetingData() itself also skips days flagged
+                // meetingsManuallyEdited, but that runs later than this
+                // merge, so without carrying these over too the day would
+                // flash back to empty meetings in between.)
+                if let existing = stored[span.dayKey], existing.meetingsManuallyEdited {
+                    newSpan.meetings = existing.meetings
+                    newSpan.meetingsManuallyEdited = true
+                    newSpan.hasCalendarData = existing.hasCalendarData
+                }
                 stored[span.dayKey] = newSpan
             }
         }

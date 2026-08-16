@@ -36,10 +36,10 @@ final class CalendarStore {
 
     // MARK: - Meeting Events
 
-    /// Returns all meeting events on `date` whose time overlaps `span`.
-    /// All-day events and events marked as "free" are excluded, since they
-    /// represent blocked-off time rather than actual attended meetings.
-    func meetingEvents(on date: Date, span: WorkdaySpan) -> [EKEvent] {
+    /// Returns all meeting events on `date` (no workday clipping). All-day
+    /// events and events marked as "free" are excluded, since they represent
+    /// blocked-off time rather than actual attended meetings.
+    func meetingEvents(on date: Date) -> [EKEvent] {
         let calendar = Calendar.current
         let startOfDay = calendar.startOfDay(for: date)
         guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else {
@@ -51,13 +51,18 @@ final class CalendarStore {
             end: endOfDay,
             calendars: nil
         )
-        let events = store.events(matching: predicate)
 
-        return events.filter { event in
+        return store.events(matching: predicate).filter { event in
             guard !event.isAllDay else { return false }
             guard event.availability != .free else { return false }
+            return event.startDate != nil && event.endDate != nil
+        }
+    }
+
+    /// Returns meeting events on `date` whose time overlaps `span`.
+    func meetingEvents(on date: Date, span: WorkdaySpan) -> [EKEvent] {
+        meetingEvents(on: date).filter { event in
             guard let start = event.startDate, let end = event.endDate else { return false }
-            // Must overlap with the actual worked span
             return start < span.end && end > span.start
         }
     }

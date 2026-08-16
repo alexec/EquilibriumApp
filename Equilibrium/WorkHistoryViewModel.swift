@@ -11,6 +11,10 @@ final class WorkHistoryViewModel: ObservableObject {
     /// (see `WeeklyInsightGenerator.WeekHeaderStats.fallbackSentence`)
     /// wherever a key is missing — model unavailable, or not generated yet.
     @Published var weekHeaderSummaries: [String: String] = [:]
+    /// The user's configured work schedule — weekly target, workday span,
+    /// and (optionally) meeting/focus targets. Set manually or parsed from
+    /// free text via `WorkPreferencesGenerator`; see `PreferencesView`.
+    @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
 
     private let store = WorkHistoryStore()
     private let liveEventStore = LiveEventStore()
@@ -86,7 +90,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 let yesterday = self.dayKey(for: self.calendar.date(byAdding: .day, value: -1, to: Date())!)
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
-                WeeklySummaryNotifier.fireIfNeeded(store: self.store)
+                WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
                 self.refreshWeekHeaderSummaries()
             }
 
@@ -113,7 +117,10 @@ final class WorkHistoryViewModel: ObservableObject {
             guard let first = week.first else { continue }
             let key = dayKey(for: first)
 
-            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(from: week.map { span(for: $0) }) else {
+            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(
+                from: week.map { span(for: $0) },
+                weeklyTargetHours: preferences.weeklyTargetHours
+            ) else {
                 lastWeekHeaderStats[key] = nil
                 weekHeaderSummaries[key] = nil
                 continue
@@ -134,33 +141,72 @@ final class WorkHistoryViewModel: ObservableObject {
         weekHeaderSummaries[dayKey(for: day)]
     }
 
-    /// Re-reads calendar events for all days that have a WorkdaySpan and
-    /// updates each span's `meetingMinutes` / `longestFocusBlockMinutes`.
+    /// Re-reads calendar events for worked days (clipped to each span) and
+    /// for remaining days in the current week (full-day, so future days
+    /// without a work capsule still show meetings). Days with hand-dragged
+    /// meetings (`meetingsManuallyEdited`) are left alone — see
+    /// `updateMeeting`.
     @MainActor
     func refreshMeetingData() async {
-        let currentSpans = spansByDay
-        var updated = currentSpans
+        var updated = spansByDay
+        let today = calendar.startOfDay(for: Date())
 
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-
-        for (dayKey, span) in currentSpans {
-            guard span.hours > 0, let date = formatter.date(from: dayKey) else { continue }
+        // Worked days: clip meetings to the actual workday span.
+        for (key, span) in spansByDay {
+            guard span.hours > 0 else { continue }
+            guard !span.meetingsManuallyEdited else { continue }
+            guard let date = dayKeyFormatter.date(from: key) else { continue }
             let events = CalendarStore.shared.meetingEvents(on: date, span: span)
-            let (meetingMinutes, longestFocus) = MeetingCalculator.compute(events: events, span: span)
             var annotated = span
-            annotated.meetingMinutes = meetingMinutes
-            annotated.longestFocusBlockMinutes = longestFocus
-            updated[dayKey] = annotated
+            annotated.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            annotated.hasCalendarData = true
+            updated[key] = annotated
+        }
+
+        // Current week from today onward: always surface calendar meetings,
+        // even when there's no workday yet (start == end → 0h placeholder).
+        for date in currentWeekDays() where date >= today {
+            let key = dayKey(for: date)
+            if let existing = updated[key], existing.hours > 0 { continue }
+            if let existing = updated[key], existing.meetingsManuallyEdited { continue }
+
+            let events = CalendarStore.shared.meetingEvents(on: date)
+            let meetings = MeetingCalculator.mergedBlocks(from: events)
+            // Don't invent empty history rows for days with nothing on the
+            // calendar; drop a prior 0h holder once its meetings clear.
+            if meetings.isEmpty {
+                if let existing = updated[key], existing.hours == 0, !existing.isManual {
+                    updated.removeValue(forKey: key)
+                }
+                continue
+            }
+
+            var span = updated[key] ?? WorkdaySpan(dayKey: key, start: date, end: date)
+            span.meetings = meetings
+            span.hasCalendarData = true
+            updated[key] = span
         }
 
         spansByDay = updated
         // Persist updated spans so meeting data survives across launches.
         store.save(updated)
-        // Meeting data just landed, which affects the meeting/focus split
-        // the week summaries describe — refresh those that changed.
+        // Meeting data just landed, which affects what the week summaries
+        // describe — refresh those that changed.
         refreshWeekHeaderSummaries()
+    }
+
+    /// Drag-clamp bounds for a meeting: the workday when one exists,
+    /// otherwise the chart's 6am–midnight window for that calendar day.
+    private func meetingClampBounds(for span: WorkdaySpan, on date: Date) -> (Date, Date) {
+        if span.hours > 0 {
+            return (span.start, span.end)
+        }
+        let startOfDay = calendar.startOfDay(for: date)
+        let start = calendar.date(
+            bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: startOfDay
+        ) ?? startOfDay
+        let end = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
+        return (start, end)
     }
 
     /// Handles a live IOKit power event: persists it and triggers a refresh
@@ -222,26 +268,69 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
     }
 
-    /// Sets a manual meeting/focus split for a day — from dragging the
-    /// boundary on its bar — clamped to that day's effective (worked)
-    /// minutes. Start/end/break are untouched and stay fully automatic.
-    func setMeetingSplit(for date: Date, meetingMinutes: Int) {
+    /// Creates or edits a day's workday span — from dragging its top edge
+    /// (start), bottom edge (end), or middle (move) on the day bar, or
+    /// drawing a brand-new one on a day with no data yet. Marks the day
+    /// `isManual` (the same flag that already protects hand-set spans from
+    /// automatic wake/sleep recompute) so this sticks. Existing meetings/
+    /// break data on the day are preserved; if calendar access is granted
+    /// and the day's meetings haven't been hand-edited, they're refetched
+    /// immediately against the new span rather than waiting for the next
+    /// auto-refresh.
+    func updateWorkday(for date: Date, newStart: Date, newEnd: Date) {
         let key = dayKey(for: date)
-        guard var span = spansByDay[key] else { return }
-        let effectiveMinutes = max(Int(span.effectiveHours * 60.0), 0)
-        span.manualMeetingMinutes = min(max(meetingMinutes, 0), effectiveMinutes)
-        spansByDay[key] = span
-        store.save(spansByDay)
+        var span = spansByDay[key] ?? WorkdaySpan(dayKey: key, start: newStart, end: newEnd)
+        span.start = newStart
+        span.end = newEnd
+        if calendarAccessGranted, !span.meetingsManuallyEdited {
+            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            span.hasCalendarData = true
+        }
+        spansByDay = store.setManualSpan(span)
+        refreshWeekHeaderSummaries()
     }
 
-    /// Clears a manual meeting/focus split, reverting the day's display to
-    /// the calendar-derived meeting time.
-    func resetMeetingSplit(for date: Date) {
+    /// Updates one meeting's start/end — from dragging its top edge, bottom
+    /// edge, or body on the day bar — clamped within that day's workday, or
+    /// the chart window when there's no workday yet. Marks the day
+    /// `meetingsManuallyEdited` so the next calendar refresh doesn't
+    /// overwrite the edit. Start/end/break are untouched.
+    func updateMeeting(for date: Date, meetingID: UUID, newStart: Date, newEnd: Date) {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
-        span.manualMeetingMinutes = nil
+        guard let index = span.meetings.firstIndex(where: { $0.id == meetingID }) else { return }
+
+        let (boundStart, boundEnd) = meetingClampBounds(for: span, on: date)
+        let clampedStart = min(max(newStart, boundStart), boundEnd)
+        let clampedEnd = min(max(newEnd, boundStart), boundEnd)
+        guard clampedStart < clampedEnd else { return }
+
+        span.meetings[index].start = clampedStart
+        span.meetings[index].end = clampedEnd
+        span.meetingsManuallyEdited = true
         spansByDay[key] = span
         store.save(spansByDay)
+        refreshWeekHeaderSummaries()
+    }
+
+    /// Clears manual meeting edits for a day and immediately re-fetches
+    /// from the calendar, reverting to calendar-derived meeting blocks.
+    func resetMeetings(for date: Date) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        span.meetingsManuallyEdited = false
+        if span.hours > 0 {
+            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+        } else {
+            let events = CalendarStore.shared.meetingEvents(on: date)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events)
+        }
+        span.hasCalendarData = true
+        spansByDay[key] = span
+        store.save(spansByDay)
+        refreshWeekHeaderSummaries()
     }
 
     /// A rolling window of full Sat-Fri weeks ending with the current week
@@ -256,24 +345,32 @@ final class WorkHistoryViewModel: ObservableObject {
         WeekCalendar.currentWeekDays(calendar: calendar)
     }
 
-    /// Recommended hours to work on `date` toward a 40-hour week, or nil if
-    /// `date` isn't a remaining, unworked weekday in the current week.
+    /// Recommended hours to work on `date` toward the configured weekly
+    /// target, or nil if `date` isn't a remaining, unworked weekday in the
+    /// current week.
     func recommendedHours(for date: Date) -> Double? {
         WorkloadRecommender.recommendedHours(
             for: date,
             week: currentWeekDays(),
             today: calendar.startOfDay(for: Date()),
+            weeklyTargetHours: preferences.weeklyTargetHours,
             hoursWorked: { [weak self] day in self?.span(for: day)?.effectiveHours ?? 0 },
             calendar: calendar
         )
     }
 
-    /// Hours worked this week subtracted from the 40-hour weekly target.
+    /// Hours worked this week subtracted from the configured weekly target.
     /// Positive means hours remain; negative means already over budget.
     func remainingWeeklyHours() -> Double {
         let week = currentWeekDays()
         let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-        return WorkloadRecommender.weeklyTargetHours - worked
+        return preferences.weeklyTargetHours - worked
+    }
+
+    /// Updates and persists the user's work-schedule preferences.
+    func updatePreferences(_ new: WorkPreferences) {
+        preferences = new
+        WorkPreferencesStore.save(new)
     }
 }
 
