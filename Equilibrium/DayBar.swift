@@ -24,8 +24,8 @@ private struct WindowDragBlocker: NSViewRepresentable {
 
 /// A single day's vertical bar: renders actual worked hours when present,
 /// otherwise a recommendation (or "over budget") placeholder — or, for a
-/// day with no data at all yet, an empty column you can drag on to create
-/// one from scratch (see `WorkdayBlockView`).
+/// day with no data at all yet, an empty column whose dashed track you can
+/// click to accept, or drag on to draw a custom span (see `WorkdayBlockView`).
 ///
 /// The workday itself (Work capsule + Break capsule beneath it, sized by
 /// the auto-detected break — the one thing here without a precise time) is
@@ -83,6 +83,22 @@ struct DayBar: View {
         recommendedHours != nil && !(span.map { $0.hours > 0 } ?? false)
     }
 
+    /// The dashed track's start/end hours when this day is empty and a
+    /// track is visible — what a click on that capsule should create.
+    /// Nil when there's already real data, weekends, or no positive
+    /// height to accept (over budget / zero recommendation).
+    private var suggestedTrackHours: (start: Double, end: Double)? {
+        guard !(span.map { $0.hours > 0 } ?? false) else { return nil }
+        guard showsWorkdayTrack && !isWeekend else { return nil }
+        if showsRecommendation, let recommendedHours {
+            guard recommendedHours > 0 else { return nil }
+            let end = (workdayStartHour + recommendedHours)
+                .clamped(to: ChartScale.startHour...ChartScale.endHour)
+            return (workdayStartHour, end)
+        }
+        return (workdayStartHour, workdayEndHour)
+    }
+
     var body: some View {
         let workdayTop = CGFloat(ChartScale.fraction(of: workdayStartHour)) * chartHeight
         let isOverBudget = showsRecommendation && (recommendedHours ?? 0) < 0
@@ -136,47 +152,68 @@ struct DayBar: View {
                 day: day,
                 chartHeight: chartHeight,
                 barWidth: barWidth,
+                isWeekend: isWeekend,
+                // Match the dashed track the user sees: recommended hours when
+                // one exists, otherwise the configured workday. A click on that
+                // empty capsule places a real span there (see emptyDayView).
+                suggestedStartHour: suggestedTrackHours?.start,
+                suggestedEndHour: suggestedTrackHours?.end,
                 onChange: onWorkdayChange
             )
 
-            if let span, span.hours > 0 {
+            // Meetings render even on days with no work capsule yet (future
+            // week days get a 0h span that only holds calendar blocks).
+            if let span, !span.meetings.isEmpty {
+                let (clampStart, clampEnd) = meetingClampBounds(for: span, day: day)
                 ForEach(span.meetings) { meeting in
                     MeetingBlockView(
                         meeting: meeting,
                         chartHeight: chartHeight,
                         barWidth: barWidth,
-                        dayStart: span.start,
-                        dayEnd: span.end,
+                        dayStart: clampStart,
+                        dayEnd: clampEnd,
                         onChange: { newStart, newEnd in
                             onMeetingChange(meeting.id, newStart, newEnd)
                         }
                     )
                 }
+            }
 
-                if showsHoursLabel {
-                    let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-                    let topOffset = CGFloat(startFrac) * chartHeight
-                    // No over-8h color signal for now, same as the outline
-                    // removed earlier — we'll come back to this.
-                    Text(hoursLabel(span))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .fixedSize()
-                        .offset(y: topOffset - 13)
-                }
+            if let span, span.hours > 0, showsHoursLabel {
+                let startFrac = ChartScale.fraction(of: hourFraction(span.start))
+                let topOffset = CGFloat(startFrac) * chartHeight
+                let isFiery = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend) > 0
+                Text(hoursLabel(span))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(isFiery ? .red : .secondary)
+                    .fixedSize()
+                    .offset(y: topOffset - 13)
             }
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
     }
+
+    /// Drag bounds for meetings: the workday when present, otherwise the
+    /// chart's 6am–midnight window so future-day meetings stay editable.
+    private func meetingClampBounds(for span: WorkdaySpan, day: Date) -> (Date, Date) {
+        if span.hours > 0 {
+            return (span.start, span.end)
+        }
+        let startOfDay = calendar.startOfDay(for: day)
+        let start = calendar.date(
+            bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: startOfDay
+        ) ?? startOfDay
+        let end = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
+        return (start, end)
+    }
 }
 
 /// A single meeting, drawn at its real start/end time and drag-editable
-/// three ways, like an event in a calendar day view: drag the top edge to
-/// move `start`, the bottom edge to move `end`, or the middle to move the
-/// whole block (preserving its duration). Too-short blocks (under ~16pt)
-/// skip the edge handles and are move-only, since there's no room to grab
-/// a distinct top/bottom strip.
+/// like an event in a calendar day view. Blocks longer than 2h support
+/// three-way edit (top = start, bottom = end, middle = move). Short
+/// blocks (≤2h) are resize-only — top half moves `start`, bottom half
+/// moves `end` — since there's no room for a distinct move strip.
 private struct MeetingBlockView: View {
     let meeting: MeetingBlock
     let chartHeight: CGFloat
@@ -193,11 +230,17 @@ private struct MeetingBlockView: View {
     @State private var dragPointsDelta: CGFloat = 0
 
     private static let edgeHandleHeight: CGFloat = 6
-    private static let splitThreshold: CGFloat = 16
     private static let minBlockHeight: CGFloat = 6
+    /// Meetings at or under this duration skip the middle move handle and
+    /// split the whole block into top/bottom resize halves.
+    private static let resizeOnlyMaxHours: Double = 2
 
     private var secondsPerPoint: Double {
         ChartScale.secondsPerPoint(chartHeight: chartHeight)
+    }
+
+    private var isResizeOnly: Bool {
+        meeting.end.timeIntervalSince(meeting.start) <= Self.resizeOnlyMaxHours * 3600
     }
 
     private var displayedStart: Date {
@@ -216,21 +259,23 @@ private struct MeetingBlockView: View {
         let topOffset = CGFloat(ChartScale.fraction(of: displayedStart)) * chartHeight
         let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd)) * chartHeight
         let height = max(bottomOffset - topOffset, Self.minBlockHeight)
-        let canSplitHandles = height >= Self.splitThreshold
 
         ZStack(alignment: .top) {
             Capsule()
                 .fill(Color.yellow)
                 .frame(width: barWidth, height: height)
 
-            if canSplitHandles {
+            if isResizeOnly {
+                let half = height / 2
+                dragHandle(mode: .resizeTop, height: half)
+                dragHandle(mode: .resizeBottom, height: half)
+                    .offset(y: half)
+            } else {
                 dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight)
                 dragHandle(mode: .moveWhole, height: height - 2 * Self.edgeHandleHeight)
                     .offset(y: Self.edgeHandleHeight)
                 dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight)
                     .offset(y: height - Self.edgeHandleHeight)
-            } else {
-                dragHandle(mode: .moveWhole, height: height)
             }
         }
         .frame(width: barWidth, height: height, alignment: .top)
@@ -296,18 +341,50 @@ private struct MeetingBlockView: View {
     }
 }
 
+/// Heat for a "fiery" day — shades of red once you're over the balanced
+/// 8h line (or working a weekend). 0 = calm gray; 1 = full red.
+private enum DayFire {
+    static let balancedHours = 8
+
+    /// 0 under the line; ramps 9→0.25 … 12+→1. Any weekend work is full fire.
+    static func intensity(hours: Int, isWeekend: Bool) -> Double {
+        if isWeekend, hours > 0 { return 1 }
+        guard hours > balancedHours else { return 0 }
+        return min(Double(hours - balancedHours) / 4.0, 1.0)
+    }
+
+    /// Work capsule: gray at 0, soft orange-red → deep red as intensity climbs.
+    static func workColor(intensity: Double) -> Color {
+        guard intensity > 0 else { return .gray }
+        let green = 0.42 - intensity * 0.32
+        let blue = 0.22 - intensity * 0.14
+        return Color(red: 0.90, green: green, blue: blue)
+    }
+
+    /// Break capsule: a lighter shade of the same fire.
+    static func breakColor(intensity: Double) -> Color {
+        guard intensity > 0 else { return Color.gray.opacity(0.35) }
+        return workColor(intensity: intensity).opacity(0.40)
+    }
+}
+
 /// The workday itself: Work + Break capsules for a day that already has
 /// data, drag-editable the same three ways as a meeting block (top edge =
 /// start, bottom edge = end, middle = move); or, for a day with no data at
-/// all yet, a single click-and-drag anywhere in the column draws a
-/// brand-new span from scratch, like dragging out a new event in a
-/// calendar day view — order-independent (drag up or down, whichever end
-/// you started from).
+/// all yet, click the dashed track to accept those hours, or click-and-drag
+/// anywhere in the column to draw a brand-new span from scratch — like
+/// dragging out a new event in a calendar day view (order-independent:
+/// drag up or down, whichever end you started from).
 private struct WorkdayBlockView: View {
     let span: WorkdaySpan?
     let day: Date
     let chartHeight: CGFloat
     let barWidth: CGFloat
+    let isWeekend: Bool
+    /// Hours matching the visible dashed track; a tap inside that region
+    /// creates a span at these times instead of requiring a draw-drag.
+    let suggestedStartHour: Double?
+    let suggestedEndHour: Double?
     let onChange: (Date, Date) -> Void
 
     private enum DragMode {
@@ -322,8 +399,8 @@ private struct WorkdayBlockView: View {
 
     private static let edgeHandleHeight: CGFloat = 8
     private static let splitThreshold: CGFloat = 24
-    private static let workColor = Color.gray
-    private static let breakColor = Color.gray.opacity(0.35)
+    /// Movement below this (in points) counts as a click, not a draw.
+    private static let tapSlop: CGFloat = 4
     private static let drawColor = Color.gray.opacity(0.5)
 
     private var secondsPerPoint: Double {
@@ -361,15 +438,19 @@ private struct WorkdayBlockView: View {
         let breakHeight = max(barHeight - workedHeight, 0)
         let canSplitHandles = barHeight >= Self.splitThreshold
 
+        let fire = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
+        let workColor = DayFire.workColor(intensity: fire)
+        let breakColor = DayFire.breakColor(intensity: fire)
+
         ZStack(alignment: .top) {
             if workedHeight > 0 {
                 Capsule()
-                    .fill(Self.workColor)
+                    .fill(workColor)
                     .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
             }
             if breakHeight > 0 {
                 Capsule()
-                    .fill(Self.breakColor)
+                    .fill(breakColor)
                     .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
                     .offset(y: workedHeight)
             }
@@ -436,7 +517,16 @@ private struct WorkdayBlockView: View {
             #endif
     }
 
-    // MARK: - Empty day: draw a new one
+    // MARK: - Empty day: accept suggestion or draw a new one
+
+    /// Y-range of the dashed track inside this column, if one is suggested.
+    private var suggestedTrackYRange: ClosedRange<CGFloat>? {
+        guard let startHour = suggestedStartHour, let endHour = suggestedEndHour,
+              endHour > startHour else { return nil }
+        let top = CGFloat(ChartScale.fraction(of: startHour)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: endHour)) * chartHeight
+        return top...max(bottom, top + barWidth)
+    }
 
     @ViewBuilder
     private func emptyDayView() -> some View {
@@ -448,18 +538,46 @@ private struct WorkdayBlockView: View {
             .background(WindowDragBlocker())
             #endif
             .gesture(
-                DragGesture(minimumDistance: 4)
+                DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        // Don't show a draw preview for a plain click on the
+                        // suggested track — that resolves to "accept" on end.
+                        if abs(value.translation.height) < Self.tapSlop,
+                           let range = suggestedTrackYRange,
+                           range.contains(value.startLocation.y) {
+                            return
+                        }
                         if drawStartY == nil { drawStartY = value.startLocation.y }
                         drawCurrentY = value.location.y
                     }
                     .onEnded { value in
-                        guard let startY = drawStartY else { return }
+                        defer {
+                            drawStartY = nil
+                            drawCurrentY = nil
+                        }
+
+                        let isTap = abs(value.translation.height) < Self.tapSlop
+
+                        // Click on the empty dotted capsule → place a real
+                        // span at those suggested hours.
+                        if isTap,
+                           let startHour = suggestedStartHour,
+                           let endHour = suggestedEndHour,
+                           let range = suggestedTrackYRange,
+                           range.contains(value.startLocation.y) {
+                            let a = snap(date(atHour: startHour))
+                            let b = snap(date(atHour: endHour))
+                            if a < b { onChange(a, b) }
+                            return
+                        }
+
+                        // A plain click elsewhere does nothing; only a real
+                        // drag draws a custom span.
+                        guard !isTap else { return }
+                        guard let startY = drawStartY ?? Optional(value.startLocation.y) else { return }
                         let endY = value.location.y
                         let a = date(atY: min(startY, endY))
                         let b = date(atY: max(startY, endY))
-                        drawStartY = nil
-                        drawCurrentY = nil
 
                         let snappedA = snap(a)
                         let snappedB = snap(b)
@@ -491,8 +609,10 @@ private struct WorkdayBlockView: View {
     /// Converts a raw Y position within `chartHeight` into a real `Date` on
     /// `day`, via `ChartScale`'s inverse mapping.
     private func date(atY y: CGFloat) -> Date {
-        let fraction = chartHeight > 0 ? Double(y / chartHeight) : 0
-        let hour = ChartScale.hour(atFraction: fraction)
+        date(atHour: ChartScale.hour(atFraction: chartHeight > 0 ? Double(y / chartHeight) : 0))
+    }
+
+    private func date(atHour hour: Double) -> Date {
         let hourInt = Int(hour)
         let minuteInt = Int((hour - Double(hourInt)) * 60)
         return Calendar.current.date(bySettingHour: hourInt, minute: minuteInt, second: 0, of: day) ?? day

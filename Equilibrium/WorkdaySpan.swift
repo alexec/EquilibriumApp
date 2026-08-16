@@ -39,10 +39,11 @@ struct WorkdaySpan: Codable, Identifiable {
     var isManual: Bool = false
 
     /// This workday's meetings, each with its own real start/end time.
-    /// Populated from EventKit (merged, clipped to `start...end`) once
-    /// calendar permission is granted and the day's been checked at least
-    /// once; empty otherwise, whether that means "no calendar access yet"
-    /// or "genuinely zero meetings" — see `hasCalendarData` for which.
+    /// Populated from EventKit once calendar permission is granted: clipped
+    /// to `start...end` for days with a real work span, or full-day for
+    /// future week days that only hold calendar blocks so far. Empty may
+    /// mean "no calendar access yet" or "genuinely zero meetings" — see
+    /// `hasCalendarData` for which.
     var meetings: [MeetingBlock] = []
 
     /// Whether this day's calendar has actually been checked — distinct
@@ -78,7 +79,7 @@ struct WorkdaySpan: Codable, Identifiable {
     }
 
     /// Worked hours after subtracting breaks — used for the displayed hour
-    /// count and the over/under-8h color, since breaks aren't worked time.
+    /// count and fiery-day intensity, since breaks aren't worked time.
     /// If the user has set a manual `breakMinutes` override, that takes
     /// precedence; otherwise auto-detected `intraBreakMinutes` is used.
     var effectiveHours: Double {

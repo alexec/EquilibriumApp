@@ -141,26 +141,50 @@ final class WorkHistoryViewModel: ObservableObject {
         weekHeaderSummaries[dayKey(for: day)]
     }
 
-    /// Re-reads calendar events for all days that have a WorkdaySpan and
-    /// updates each span's `meetings`. Days with hand-dragged meetings
-    /// (`meetingsManuallyEdited`) are left alone — see `updateMeeting`.
+    /// Re-reads calendar events for worked days (clipped to each span) and
+    /// for remaining days in the current week (full-day, so future days
+    /// without a work capsule still show meetings). Days with hand-dragged
+    /// meetings (`meetingsManuallyEdited`) are left alone — see
+    /// `updateMeeting`.
     @MainActor
     func refreshMeetingData() async {
-        let currentSpans = spansByDay
-        var updated = currentSpans
+        var updated = spansByDay
+        let today = calendar.startOfDay(for: Date())
 
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = .current
-
-        for (dayKey, span) in currentSpans {
-            guard span.hours > 0, let date = formatter.date(from: dayKey) else { continue }
+        // Worked days: clip meetings to the actual workday span.
+        for (key, span) in spansByDay {
+            guard span.hours > 0 else { continue }
             guard !span.meetingsManuallyEdited else { continue }
+            guard let date = dayKeyFormatter.date(from: key) else { continue }
             let events = CalendarStore.shared.meetingEvents(on: date, span: span)
             var annotated = span
             annotated.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
             annotated.hasCalendarData = true
-            updated[dayKey] = annotated
+            updated[key] = annotated
+        }
+
+        // Current week from today onward: always surface calendar meetings,
+        // even when there's no workday yet (start == end → 0h placeholder).
+        for date in currentWeekDays() where date >= today {
+            let key = dayKey(for: date)
+            if let existing = updated[key], existing.hours > 0 { continue }
+            if let existing = updated[key], existing.meetingsManuallyEdited { continue }
+
+            let events = CalendarStore.shared.meetingEvents(on: date)
+            let meetings = MeetingCalculator.mergedBlocks(from: events)
+            // Don't invent empty history rows for days with nothing on the
+            // calendar; drop a prior 0h holder once its meetings clear.
+            if meetings.isEmpty {
+                if let existing = updated[key], existing.hours == 0, !existing.isManual {
+                    updated.removeValue(forKey: key)
+                }
+                continue
+            }
+
+            var span = updated[key] ?? WorkdaySpan(dayKey: key, start: date, end: date)
+            span.meetings = meetings
+            span.hasCalendarData = true
+            updated[key] = span
         }
 
         spansByDay = updated
@@ -169,6 +193,20 @@ final class WorkHistoryViewModel: ObservableObject {
         // Meeting data just landed, which affects what the week summaries
         // describe — refresh those that changed.
         refreshWeekHeaderSummaries()
+    }
+
+    /// Drag-clamp bounds for a meeting: the workday when one exists,
+    /// otherwise the chart's 6am–midnight window for that calendar day.
+    private func meetingClampBounds(for span: WorkdaySpan, on date: Date) -> (Date, Date) {
+        if span.hours > 0 {
+            return (span.start, span.end)
+        }
+        let startOfDay = calendar.startOfDay(for: date)
+        let start = calendar.date(
+            bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: startOfDay
+        ) ?? startOfDay
+        let end = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
+        return (start, end)
     }
 
     /// Handles a live IOKit power event: persists it and triggers a refresh
@@ -254,16 +292,18 @@ final class WorkHistoryViewModel: ObservableObject {
     }
 
     /// Updates one meeting's start/end — from dragging its top edge, bottom
-    /// edge, or body on the day bar — clamped within that day's start...end.
-    /// Marks the day `meetingsManuallyEdited` so the next calendar refresh
-    /// doesn't overwrite the edit. Start/end/break are untouched.
+    /// edge, or body on the day bar — clamped within that day's workday, or
+    /// the chart window when there's no workday yet. Marks the day
+    /// `meetingsManuallyEdited` so the next calendar refresh doesn't
+    /// overwrite the edit. Start/end/break are untouched.
     func updateMeeting(for date: Date, meetingID: UUID, newStart: Date, newEnd: Date) {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
         guard let index = span.meetings.firstIndex(where: { $0.id == meetingID }) else { return }
 
-        let clampedStart = min(max(newStart, span.start), span.end)
-        let clampedEnd = min(max(newEnd, span.start), span.end)
+        let (boundStart, boundEnd) = meetingClampBounds(for: span, on: date)
+        let clampedStart = min(max(newStart, boundStart), boundEnd)
+        let clampedEnd = min(max(newEnd, boundStart), boundEnd)
         guard clampedStart < clampedEnd else { return }
 
         span.meetings[index].start = clampedStart
@@ -280,8 +320,13 @@ final class WorkHistoryViewModel: ObservableObject {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
         span.meetingsManuallyEdited = false
-        let events = CalendarStore.shared.meetingEvents(on: date, span: span)
-        span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+        if span.hours > 0 {
+            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+        } else {
+            let events = CalendarStore.shared.meetingEvents(on: date)
+            span.meetings = MeetingCalculator.mergedBlocks(from: events)
+        }
         span.hasCalendarData = true
         spansByDay[key] = span
         store.save(spansByDay)
