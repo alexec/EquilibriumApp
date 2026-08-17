@@ -25,9 +25,15 @@ enum WeekCalendar {
 
     /// The full Saturday-through-Friday range of the week `offset` weeks
     /// from this one, including days still in the future.
+    ///
+    /// Always exactly seven days: callers index `days` and `spans` in step,
+    /// so a short array would silently pair a day with another day's hours.
+    /// Day arithmetic doesn't realistically fail, but where it did, repeating
+    /// the week's first day keeps the count right rather than dropping a
+    /// column.
     static func weekDays(offset: Int = 0, calendar: Calendar = .current, today: Date = .init()) -> [Date] {
         let start = weekStart(offset: offset, calendar: calendar, today: today)
-        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        return (0..<7).map { calendar.date(byAdding: .day, value: $0, to: start) ?? start }
     }
 
     /// This week's full Saturday-through-Friday range, including future days.

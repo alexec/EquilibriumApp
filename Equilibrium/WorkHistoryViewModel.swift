@@ -372,7 +372,11 @@ final class WorkHistoryViewModel: ObservableObject {
         case 0: return "This week"
         case -1: return "Last week"
         default:
-            guard let first = visibleWeekDays.first, let last = visibleWeekDays.last else { return "" }
+            // One computation of the week, not two: each call re-derives the
+            // range from "now", so asking twice could straddle midnight and
+            // label a range whose ends come from different weeks.
+            let week = visibleWeekDays
+            guard let first = week.first, let last = week.last else { return "" }
             let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
             let end = sameMonth ? Self.dayOnlyFormatter : Self.monthDayFormatter
             return "\(Self.monthDayFormatter.string(from: first)) – \(end.string(from: last))"
