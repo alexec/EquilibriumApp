@@ -23,10 +23,12 @@ focus and to relax, and to get the right work-life balance.
   persisted to disk so history accumulates across app restarts.
 - Persists computed days to disk so history survives even after macOS
   rolls the underlying wake/sleep log off its own short retention window.
-- Shows a rolling 2-week bar chart, styled after Apple Health's activity
-  charts — each day's bar spans its actual start-to-end time, scaled
-  6 AM–midnight, colored gray normally and red on weekends or any day
-  over 8 hours.
+- Shows one week at a time, styled after Apple Health's activity charts —
+  each day's bar spans its actual start-to-end time, scaled 6 AM–midnight,
+  colored gray normally and red on weekends or any day over 8 hours.
+- Step back through earlier weeks by swiping two fingers across the chart,
+  with ⌘[ and ⌘], or with the arrows above it — weeks slide in from the
+  side they sit on.
 - Recommends how many hours to work on remaining days this week to land
   on a 40-hour week — filling at 8h/day until the budget's used up, or
   flagging when you're already over.

@@ -59,6 +59,21 @@ enum WeeklyInsightGenerator {
             )
         }
 
+        /// How far the average weekday sat from target, already worked out
+        /// and worded, so the model never has to subtract anything: asked to
+        /// do the arithmetic itself it has said "3 hours over" about a week
+        /// averaging 4h against an 8h target. It phrases the sentence; the
+        /// comparison at the heart of it is decided here.
+        var targetComparison: String {
+            let difference = workAvgHours - targetHoursPerDay
+            if abs(difference) < 0.25 {
+                return "right on target"
+            }
+            return difference > 0
+                ? "\(HoursFormat.string(difference)) over target"
+                : "\(HoursFormat.string(-difference)) under target"
+        }
+
         /// The deterministic "Nh meetings/day, ..." sentence, used whenever
         /// the LLM is unavailable or hasn't produced a summary yet.
         var fallbackSentence: String {
@@ -86,26 +101,35 @@ enum WeeklyInsightGenerator {
             """
             You are a calm, plain-spoken assistant inside a personal work-hours \
             tracking app, writing a one-line caption that sits directly above a \
-            small chart of one work week. Given that week's average-per-weekday \
-            work hours and their target, write ONE concise sentence (max ~16 \
-            words) starting with "You worked" whose main point is whether they \
-            worked OVER or UNDER their target — state it plainly (over by how \
-            much, under by how much, or right on target), not just a neutral \
-            recap. Mention meetings only if given below, and only in passing — \
-            the over/under comparison is what matters. Never invent numbers \
-            that weren't given to you. When a duration is a half hour, write \
-            it with the ½ symbol (e.g. "3½h"), never "3.5h" or "three and a \
-            half hours". No markdown, no emoji, no exclamation marks, no \
-            preamble like "Here's" — just the sentence itself.
+            small chart of one work week, which may be the current week or an \
+            earlier one — so never call it "this week". Given that week's \
+            average-per-weekday \
+            work hours and their target, write a single concise sentence (max \
+            ~16 words) starting with "You worked" whose main point is the \
+            "Versus target" line given below — state it plainly, not just a \
+            neutral recap. Use that line's direction and amount exactly as \
+            given: never work out the difference yourself, and never contradict \
+            it. Mention meetings only if given below, and only in passing — the \
+            comparison against target is what matters. Never invent numbers \
+            that weren't given to you. When a duration is a half hour, \
+            write it with the ½ symbol (e.g. "3½h"), never "3.5h" or "three and \
+            a half hours". Use ordinary sentence case throughout: never put a \
+            word in capitals for emphasis. No markdown, no emoji, no \
+            exclamation marks, no preamble like "Here's" — just the sentence \
+            itself.
             """
         })
 
         // Rounded to the nearest half hour before it ever reaches the model,
         // so it can't echo back noisy precision like "8.0" or "7.83".
+        // No "this week" anywhere in the input: the chart can be showing any
+        // week you've paged back to, and the model repeats the phrase back
+        // when it's there, captioning last week as though it were this one.
         var lines = [
-            "Average per weekday this week:",
+            "Average per weekday in the week shown:",
             "Work: \(HoursFormat.string(stats.workAvgHours))",
             "Target: \(HoursFormat.string(stats.targetHoursPerDay))",
+            "Versus target: \(stats.targetComparison)",
         ]
         if let meeting = stats.meetingAvgHours {
             lines.append("Meetings: \(HoursFormat.string(meeting))")
