@@ -11,11 +11,13 @@ import FoundationModels
 /// asking it to produce free text we'd then have to parse ourselves.
 ///
 /// Same macOS 26+ / Apple Intelligence availability gating as
-/// `WeeklyInsightGenerator` — see its doc comment for why every reference
+/// `WeeklyInsightGenerator` — see `OnDeviceModel` for why every reference
 /// to FoundationModels types, not just the `import`, is behind
-/// `#if canImport(FoundationModels)`.
+/// `#if canImport(FoundationModels)`. This is a convenience, not the only
+/// way in: when it's unavailable, `PreferencesView` shows
+/// `WorkPreferencesForm`'s controls for the same settings.
 enum WorkPreferencesGenerator {
-    static var isAvailable: Bool { WeeklyInsightGenerator.isAvailable }
+    static var isAvailable: Bool { OnDeviceModel.isAvailable }
 
     #if canImport(FoundationModels)
     @available(macOS 26.0, *)

@@ -1,15 +1,22 @@
 import SwiftUI
 
 /// Lets the user configure their work schedule by describing it in free
-/// text (parsed into structured values by the on-device LLM). No Stepper
-/// form — the result is shown back as a plain-English sentence generated
-/// from the settings (`WorkPreferences.summarySentence`), which stays
-/// hidden until there's something to show: either a prior saved
-/// configuration, or a fresh one you've just generated.
+/// text (parsed into structured values by the on-device LLM). The result is
+/// shown back as a plain-English sentence generated from the settings
+/// (`WorkPreferences.summarySentence`), which stays hidden until there's
+/// something to show: either a prior saved configuration, or a fresh one
+/// you've just generated.
 ///
 /// The text box starts pre-filled with an example sentence rather than a
 /// non-interactive placeholder — it's real, editable content from the
 /// start, so there's something concrete to tweak instead of a blank box.
+///
+/// On Macs where the on-device model isn't available — most of them, for
+/// now: anything before macOS 26, every Intel Mac, and any Mac with Apple
+/// Intelligence switched off — the text box is replaced by
+/// `WorkPreferencesForm`'s controls, which reach exactly the same settings.
+/// This panel is the only way to set a work schedule at all, so it can't be
+/// allowed to depend on an LLM that most machines don't have.
 struct PreferencesView: View {
     let current: WorkPreferences
     let onSave: (WorkPreferences) -> Void
@@ -25,6 +32,12 @@ struct PreferencesView: View {
     @State private var isGenerating = false
     @State private var generationFailed = false
 
+    /// Why the free-text path is off, or nil when the model is usable.
+    /// Captured once at init rather than re-read on every `body` evaluation:
+    /// it can't meaningfully change while this small popover is open, and
+    /// re-querying the framework mid-layout would be needless work.
+    private let modelUnavailability: OnDeviceModel.Unavailability?
+
     private static let examplePrompt = "I'd like to work a balanced 9-5 week with 3h of meetings a day, and 5h of focus time."
 
     init(
@@ -39,6 +52,7 @@ struct PreferencesView: View {
         self.calendars = calendars
         self.calendarSelection = calendarSelection
         self.onCalendarSelectionChange = onCalendarSelectionChange
+        self.modelUnavailability = OnDeviceModel.unavailability
         _draft = State(initialValue: current)
         _freeText = State(initialValue: Self.examplePrompt)
         // Only show a result up front if there's already a real, previously
@@ -51,12 +65,10 @@ struct PreferencesView: View {
             Text("Work Preferences")
                 .font(.headline)
 
-            if WorkPreferencesGenerator.isAvailable {
-                describeYourWeekSection
+            if let modelUnavailability {
+                manualSection(explanation: modelUnavailability.message)
             } else {
-                Text("On-device AI isn't available on this Mac, so preferences can't be configured here yet.")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                describeYourWeekSection
             }
 
             Divider()
@@ -67,12 +79,19 @@ struct PreferencesView: View {
                 onChange: onCalendarSelectionChange
             )
 
-            if hasResult {
+            // The generated sentence is the only feedback the free-text path
+            // gives, so it appears as soon as there's a result. The manual
+            // controls already show their own values, so they skip it and go
+            // straight to Save — which is always available there, since the
+            // draft is editable from the moment the panel opens.
+            if hasResult || modelUnavailability != nil {
                 Divider()
-                Text(draft.summarySentence)
-                    .font(.system(size: 12))
-                    .foregroundColor(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if modelUnavailability == nil {
+                    Text(draft.summarySentence)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 HStack {
                     Spacer()
@@ -85,6 +104,20 @@ struct PreferencesView: View {
         }
         .padding(16)
         .frame(width: 300)
+    }
+
+    private func manualSection(explanation: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Your ideal week")
+                .font(.system(size: 12, weight: .medium))
+
+            WorkPreferencesForm(preferences: $draft)
+
+            Text(explanation)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var describeYourWeekSection: some View {
