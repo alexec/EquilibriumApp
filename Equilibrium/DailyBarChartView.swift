@@ -35,9 +35,9 @@ struct DailyBarChartView: View {
     /// That day's intention / check-in, or nil if nothing's recorded — this
     /// is what fills in the buttons above and below each bar.
     let intention: (Date) -> DailyIntention?
-    /// The day the side panel is editing, if any, so its column's buttons
-    /// can show as selected.
-    let selection: DayEditorSelection?
+    /// The day the side panel is showing, so its column's button can show
+    /// as selected.
+    let selection: DayEditorSelection
     let onSelectDay: (Date, DailyPromptKind) -> Void
     let onMeetingChange: (Date, UUID, Date, Date) -> Void
     let onWorkdayChange: (Date, Date, Date) -> Void

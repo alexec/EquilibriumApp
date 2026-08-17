@@ -8,34 +8,31 @@ struct ContentView: View {
         HStack(alignment: .top, spacing: 16) {
             chartColumn
 
-            if let editor = viewModel.dayEditor {
-                DayDetailPanel(
-                    day: editor.day,
-                    meetings: viewModel.meetings(for: editor.day),
-                    existing: viewModel.intention(for: editor.day),
-                    allowsCheckIn: editor.day <= Calendar.current.startOfDay(for: Date()),
-                    calendarAccessGranted: viewModel.calendarAccessGranted,
-                    initialFocus: editor.kind,
-                    // Saving leaves the panel open: the day's button filling
-                    // in behind it is the confirmation, and closing after
-                    // every save would fight the way this is meant to be
-                    // used — working back through several days in a row.
-                    onSave: { goals, outcomes, reflection in
-                        viewModel.saveDayEntry(
-                            day: editor.day,
-                            goals: goals,
-                            outcomes: outcomes,
-                            reflection: reflection
-                        )
-                    },
-                    onClose: closePanel
-                )
-                // Rebuilt when the day changes so its fields reload from
-                // that day's saved text rather than keeping the last day's
-                // edits in @State.
-                .id(editor.day)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+            let editor = viewModel.dayEditor
+            DayDetailPanel(
+                day: editor.day,
+                meetings: viewModel.meetings(for: editor.day),
+                existing: viewModel.intention(for: editor.day),
+                allowsCheckIn: editor.day <= Calendar.current.startOfDay(for: Date()),
+                calendarAccessGranted: viewModel.calendarAccessGranted,
+                initialFocus: editor.kind,
+                // Nothing to dismiss and nothing to confirm: text is written
+                // as it's typed, and the day's button filling in behind the
+                // panel is the confirmation.
+                onSave: { goals, outcomes, reflection in
+                    viewModel.saveDayEntry(
+                        day: editor.day,
+                        goals: goals,
+                        outcomes: outcomes,
+                        reflection: reflection
+                    )
+                }
+            )
+            // Rebuilt when the day changes so its fields reload from that
+            // day's saved text rather than keeping the last day's edits in
+            // @State — and so the outgoing day's pending write is flushed by
+            // its `onDisappear`.
+            .id(editor.day)
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -48,12 +45,6 @@ struct ContentView: View {
         }
         .onDisappear {
             viewModel.stopAutoRefresh()
-        }
-    }
-
-    private func closePanel() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            viewModel.dismissDayEditor()
         }
     }
 
@@ -122,28 +113,6 @@ struct ContentView: View {
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
-
-            Button(dailyPromptTitle) {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    viewModel.presentDailyPrompt(dailyPromptKind)
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .frame(maxWidth: .infinity)
         }
     }
-
-    /// One control: morning intention until it's set, then end-of-day check-in.
-    private var dailyPromptKind: DailyPromptKind {
-        viewModel.todayIntention()?.hasIntention == true ? .checkIn : .intention
-    }
-
-    private var dailyPromptTitle: String {
-        switch dailyPromptKind {
-        case .intention: return "Set intention"
-        case .checkIn: return "Check in"
-        }
-    }
-
 }

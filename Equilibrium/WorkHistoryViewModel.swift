@@ -32,8 +32,10 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
-    /// When set, the main window shows the day panel alongside the chart.
-    @Published var dayEditor: DayEditorSelection?
+    /// The day shown in the panel beside the chart. Always set — the panel
+    /// is permanent furniture rather than something you open — so this
+    /// starts on today and only ever moves to another day.
+    @Published var dayEditor = DayEditorSelection(day: Calendar.current.startOfDay(for: Date()), kind: .intention)
     /// Calendars offered by the preferences picker. Empty until calendar
     /// access is granted, since EventKit vends nothing before then.
     @Published var availableCalendars: [SelectableCalendar] = []
@@ -437,13 +439,26 @@ final class WorkHistoryViewModel: ObservableObject {
     func showPreviousWeek() {
         guard canShowPreviousWeek else { return }
         weekOffset -= 1
+        moveSelectionWithWeek(days: -7)
         refreshWeekHeaderSummaries()
     }
 
     func showNextWeek() {
         guard canShowNextWeek else { return }
         weekOffset += 1
+        moveSelectionWithWeek(days: 7)
         refreshWeekHeaderSummaries()
+    }
+
+    /// Keeps the panel on the week the chart is showing, landing on the same
+    /// weekday: paging back from Monday shows the Monday before it. Without
+    /// this the panel would sit on a day that isn't among the bars beside
+    /// it, its highlighted column nowhere on screen.
+    private func moveSelectionWithWeek(days: Int) {
+        guard let moved = calendar.date(byAdding: .day, value: days, to: dayEditor.day) else { return }
+        // Paging forward can land past today, which has no check-in to make;
+        // the panel handles that by hiding the section, so only the day moves.
+        dayEditor = DayEditorSelection(day: moved, kind: dayEditor.kind)
     }
 
     /// This week's full Saturday-through-Friday range, including future days.
@@ -482,10 +497,6 @@ final class WorkHistoryViewModel: ObservableObject {
 
     // MARK: - Daily intention / check-in
 
-    func todayIntention() -> DailyIntention? {
-        intention(for: Date())
-    }
-
     /// A day's intention / check-in, for any day — the chart's buttons and
     /// the panel both work on whichever day you click, not just today.
     func intention(for day: Date) -> DailyIntention? {
@@ -509,7 +520,16 @@ final class WorkHistoryViewModel: ObservableObject {
     /// what returns the day's button to its unfilled state.
     func saveDayEntry(day: Date, goals: String, outcomes: String, reflection: String) {
         let key = dayKey(for: day)
-        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+        let existing = intentionsByDay[key]
+
+        // Opening a day and moving on without typing shouldn't leave a
+        // record behind. With auto-save, closing the panel always writes,
+        // so without this every day merely glanced at would be stored as an
+        // empty entry.
+        let isBlank = (goals + outcomes + reflection).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard existing != nil || !isBlank else { return }
+
+        var entry = existing ?? DailyIntention(dayKey: key)
         entry.goals = goals
         entry.outcomes = outcomes
         entry.checkInReflection = reflection
@@ -519,28 +539,21 @@ final class WorkHistoryViewModel: ObservableObject {
         let hasReflection = !reflection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         entry.checkedInAt = hasReflection ? (entry.checkedInAt ?? Date()) : nil
 
+        // Auto-save fires on every close as well as on a debounce, so most
+        // calls have nothing new in them; rewriting the file anyway would be
+        // churn for no change.
+        guard entry != existing else { return }
         intentionsByDay = intentionStore.upsert(entry)
     }
 
-    /// Opens the panel on `day`, focused on one of its two sections.
-    /// Clicking the button that's already open closes the panel again.
+    /// Points the panel at `day`, focused on one of its two sections.
     func selectDay(_ day: Date, kind: DailyPromptKind) {
-        let start = calendar.startOfDay(for: day)
-        if dayEditor == DayEditorSelection(day: start, kind: kind) {
-            dayEditor = nil
-        } else {
-            dayEditor = DayEditorSelection(day: start, kind: kind)
-        }
+        dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
     }
 
-    /// Opens today's panel (from the main button, menu bar, or a
-    /// notification tap).
+    /// Points the panel at today (from the menu bar or a notification tap).
     func presentDailyPrompt(_ kind: DailyPromptKind) {
-        dayEditor = DayEditorSelection(day: calendar.startOfDay(for: Date()), kind: kind)
-    }
-
-    func dismissDayEditor() {
-        dayEditor = nil
+        selectDay(Date(), kind: kind)
     }
 
     /// Handles a tap on a daily-intention notification (`userInfo` action).

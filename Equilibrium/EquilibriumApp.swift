@@ -21,11 +21,10 @@ struct EquilibriumApp: App {
         DailyIntentionNotifier.reschedule(preferences: viewModel.preferences)
     }
 
-    /// The day panel's contribution to the window's width — zero when it's
-    /// closed, its own width plus the gap to the chart when it's open.
-    private var panelWidth: CGFloat {
-        viewModel.dayEditor == nil ? 0 : DayDetailPanel.width + 16
-    }
+    /// The day panel's contribution to the window's width. It's always on
+    /// screen, so this is a constant — the window is simply that much wider
+    /// than the chart it holds.
+    private let panelWidth = DayDetailPanel.width + 16
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -37,10 +36,9 @@ struct EquilibriumApp: App {
                 // without it they'd stay needlessly wide, with the week's
                 // bars stranded far apart.
                 //
-                // Opening the day panel widens all three bounds by its width
-                // rather than squeezing the chart: with `.contentSize`
-                // resizability the window grows to meet it, so the panel
-                // arrives beside the bars instead of on top of them.
+                // Every bound carries the day panel's width on top of that,
+                // so resizing changes what the chart gets and leaves the
+                // panel alone — it holds text at a fixed, readable measure.
                 .frame(
                     minWidth: 360 + panelWidth,
                     idealWidth: 420 + panelWidth,

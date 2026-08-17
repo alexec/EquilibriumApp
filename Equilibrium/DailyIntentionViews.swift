@@ -36,12 +36,13 @@ struct DayDetailPanel: View {
     let calendarAccessGranted: Bool
     let initialFocus: DailyPromptKind
     let onSave: (String, String, String) -> Void
-    let onClose: () -> Void
 
     @State private var goals: String
     @State private var outcomes: String
     @State private var reflection: String
     @FocusState private var focusedField: Field?
+    /// The pending debounced write; cancelled and replaced on each keystroke.
+    @State private var saveTask: Task<Void, Never>?
 
     private enum Field {
         case goals
@@ -55,8 +56,7 @@ struct DayDetailPanel: View {
         allowsCheckIn: Bool,
         calendarAccessGranted: Bool,
         initialFocus: DailyPromptKind,
-        onSave: @escaping (String, String, String) -> Void,
-        onClose: @escaping () -> Void
+        onSave: @escaping (String, String, String) -> Void
     ) {
         self.day = day
         self.meetings = meetings
@@ -65,7 +65,6 @@ struct DayDetailPanel: View {
         self.calendarAccessGranted = calendarAccessGranted
         self.initialFocus = initialFocus
         self.onSave = onSave
-        self.onClose = onClose
         _goals = State(initialValue: existing?.goals ?? "")
         _outcomes = State(initialValue: existing?.outcomes ?? "")
         _reflection = State(initialValue: existing?.checkInReflection ?? "")
@@ -86,7 +85,9 @@ struct DayDetailPanel: View {
                             .id(Field.goals)
                         field(title: "Goals", prompt: "What do you want to accomplish?", text: $goals)
                             .focused($focusedField, equals: .goals)
+                            .onChange(of: goals) { _ in scheduleSave() }
                         field(title: "Outcomes", prompt: "What does success look like?", text: $outcomes)
+                            .onChange(of: outcomes) { _ in scheduleSave() }
 
                         if allowsCheckIn {
                             Divider()
@@ -100,6 +101,7 @@ struct DayDetailPanel: View {
                             )
                             .focused($focusedField, equals: .reflection)
                             .id(Field.reflection)
+                            .onChange(of: reflection) { _ in scheduleSave() }
                         }
                     }
                     .padding(.vertical, 12)
@@ -110,17 +112,13 @@ struct DayDetailPanel: View {
                 // changes the kind, so the focus has to follow that too.
                 .onChange(of: initialFocus) { _ in applyInitialFocus(proxy: proxy) }
             }
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Save") {
-                    onSave(goals, outcomes, reflection)
-                }
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(.top, 10)
+        }
+        // Whatever is still pending is written before this panel goes away —
+        // closing it, switching to another day, or the window shutting all
+        // land here, so nothing typed is lost by navigating away.
+        .onDisappear {
+            saveTask?.cancel()
+            onSave(goals, outcomes, reflection)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
@@ -132,6 +130,21 @@ struct DayDetailPanel: View {
     }
 
     static let width: CGFloat = 280
+
+    /// There's no Save button: the panel isn't a dialog you finish with, so
+    /// typing is the whole interaction. Writes are debounced rather than
+    /// per-keystroke because each one rewrites the whole intentions file,
+    /// and the day's button filling in the chart is the confirmation.
+    private static let saveDebounce: Duration = .milliseconds(500)
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.saveDebounce)
+            guard !Task.isCancelled else { return }
+            onSave(goals, outcomes, reflection)
+        }
+    }
 
     /// Puts the cursor in the section whose button was clicked and scrolls
     /// it into view — on a day with a full diary the check-in starts below
@@ -151,19 +164,13 @@ struct DayDetailPanel: View {
         }
     }
 
+    /// No close button: the panel is always on screen, so the only thing
+    /// that changes is which day it's showing.
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             Text(Self.dayTitle(day))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.cancelAction)
-            .help("Close")
         }
         .padding(.top, 16)
     }

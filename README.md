@@ -36,8 +36,11 @@ focus and to relax, and to get the right work-life balance.
   30-minute-increment break duration subtracted from the displayed hours.
 - Every day carries a morning intention (the sun above its bar) and an
   end-of-day check-in (the moon below it), filled in once written.  Click
-  either — on any day, not just today — to edit it in a panel beside the
-  chart, alongside that day's meetings.
+  either — on any day, not just today — to bring that day up in the panel
+  beside the chart, alongside its meetings.
+- The panel is always there, on today to begin with, and follows the chart
+  to the same weekday as you page through weeks.  There's nothing to save:
+  what you type is written as you go.
 - Follows the system's light/dark appearance automatically.
 - Uses Apple's on-device LLM where it exists, but never depends on it: on
   macOS before 26, on Intel Macs, and with Apple Intelligence turned off,
