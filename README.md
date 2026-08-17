@@ -34,6 +34,10 @@ focus and to relax, and to get the right work-life balance.
   flagging when you're already over.
 - Days can be manually edited, overridden, or deleted, with an optional
   30-minute-increment break duration subtracted from the displayed hours.
+- Every day carries a morning intention (the sun above its bar) and an
+  end-of-day check-in (the moon below it), filled in once written.  Click
+  either — on any day, not just today — to edit it in a panel beside the
+  chart, alongside that day's meetings.
 - Follows the system's light/dark appearance automatically.
 - Uses Apple's on-device LLM where it exists, but never depends on it: on
   macOS before 26, on Intel Macs, and with Apple Intelligence turned off,

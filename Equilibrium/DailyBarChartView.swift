@@ -32,6 +32,13 @@ struct DailyBarChartView: View {
     let canShowNextWeek: Bool
     let onShowPreviousWeek: () -> Void
     let onShowNextWeek: () -> Void
+    /// That day's intention / check-in, or nil if nothing's recorded — this
+    /// is what fills in the buttons above and below each bar.
+    let intention: (Date) -> DailyIntention?
+    /// The day the side panel is editing, if any, so its column's buttons
+    /// can show as selected.
+    let selection: DayEditorSelection?
+    let onSelectDay: (Date, DailyPromptKind) -> Void
     let onMeetingChange: (Date, UUID, Date, Date) -> Void
     let onWorkdayChange: (Date, Date, Date) -> Void
     let onResetMeetings: (Date) -> Void
@@ -43,6 +50,9 @@ struct DailyBarChartView: View {
 
     static let minimumHeight: CGFloat = 220
     private static let labelHeight: CGFloat = 44
+    // The intention button sits above each bar and the check-in below it,
+    // one row of this height each, taken off the bars' own height.
+    private static let promptRowHeight: CGFloat = 16
     // Fits the week navigation row plus the stats sentence below it, which
     // can still wrap to two lines at the narrowest window width.
     private static let weekHeaderHeight: CGFloat = 46
@@ -79,6 +89,7 @@ struct DailyBarChartView: View {
     var body: some View {
         GeometryReader { geo in
             let chartHeight = geo.size.height - Self.labelHeight - Self.weekHeaderHeight
+                - (Self.promptRowHeight + Self.columnSpacing) * 2
 
             VStack(alignment: .leading, spacing: 4) {
                 weekAverageHeader
@@ -90,6 +101,10 @@ struct DailyBarChartView: View {
                         width: Self.yAxisWidth,
                         label: yAxisLabel
                     )
+                    // The bars start a row lower than they used to, so the
+                    // hour labels have to drop by the same amount to keep
+                    // pointing at the right heights.
+                    .padding(.top, Self.promptRowHeight + Self.columnSpacing)
 
                     dayColumns(chartHeight: chartHeight)
                         // Identity tied to the week, so changing week is an
@@ -187,6 +202,56 @@ struct DailyBarChartView: View {
         .help(label)
     }
 
+    /// A day's intention (above its bar) or check-in (below it): a sun for
+    /// the morning and a moon for the evening, filled once something's been
+    /// written and hollow while it hasn't. Clicking opens that day in the
+    /// side panel — including days long past, which is the point of putting
+    /// these on every column rather than only on today.
+    @ViewBuilder
+    private func promptButton(day: Date, kind: DailyPromptKind) -> some View {
+        let entry = intention(day)
+        let isFilled = kind == .intention ? (entry?.hasIntention ?? false) : (entry?.hasCheckIn ?? false)
+        let isSelected = selection == DayEditorSelection(day: Calendar.current.startOfDay(for: day), kind: kind)
+        // A day that hasn't happened has nothing to check in about; its
+        // intention is still worth setting in advance, so only this half
+        // disappears — as an empty slot, so the bars stay aligned.
+        let isAvailable = kind == .intention || day <= Calendar.current.startOfDay(for: Date())
+
+        if isAvailable {
+            Button {
+                onSelectDay(day, kind)
+            } label: {
+                Image(systemName: symbolName(kind: kind, filled: isFilled))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isFilled ? .accentColor : .secondary.opacity(0.4))
+                    .frame(width: Self.promptRowHeight, height: Self.promptRowHeight)
+                    .background(
+                        Circle()
+                            .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(helpText(kind: kind, filled: isFilled))
+        } else {
+            Color.clear.frame(height: Self.promptRowHeight)
+        }
+    }
+
+    private func symbolName(kind: DailyPromptKind, filled: Bool) -> String {
+        switch kind {
+        case .intention: return filled ? "sun.max.fill" : "sun.max"
+        case .checkIn: return filled ? "moon.fill" : "moon"
+        }
+    }
+
+    private func helpText(kind: DailyPromptKind, filled: Bool) -> String {
+        switch kind {
+        case .intention: return filled ? "Edit this day's intention" : "Set an intention for this day"
+        case .checkIn: return filled ? "Edit this day's check-in" : "Check in on this day"
+        }
+    }
+
     private func dayColumns(chartHeight: CGFloat) -> some View {
         HStack(alignment: .top, spacing: Self.columnSpacing) {
             ForEach(Array(days.enumerated()), id: \.offset) { index, day in
@@ -200,6 +265,9 @@ struct DailyBarChartView: View {
         let isHovering = hoveringDay == day
 
         return VStack(spacing: 2) {
+            promptButton(day: day, kind: .intention)
+                .padding(.bottom, Self.columnSpacing - 2)
+
             DayBar(
                 span: span,
                 day: day,
@@ -218,6 +286,10 @@ struct DailyBarChartView: View {
                     onWorkdayChange(day, newStart, newEnd)
                 }
             )
+
+            promptButton(day: day, kind: .checkIn)
+                .padding(.top, Self.columnSpacing - 2)
+
             Text(weekdayLabel(day))
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)

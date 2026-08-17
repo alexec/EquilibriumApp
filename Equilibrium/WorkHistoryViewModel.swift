@@ -1,10 +1,19 @@
 import Foundation
 import Combine
 
-/// Which daily-intention sheet the main window should present, if any.
+/// The two things recorded against a day: a morning intention and an
+/// end-of-day check-in.
 enum DailyPromptKind: Equatable {
     case intention
     case checkIn
+}
+
+/// The day the side panel is editing, and which of its two sections asked
+/// to be edited — the panel always shows both, so the kind only decides
+/// where the keyboard focus lands.
+struct DayEditorSelection: Equatable {
+    let day: Date
+    var kind: DailyPromptKind
 }
 
 @MainActor
@@ -23,8 +32,8 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
-    /// When set, the main window presents the matching intention / check-in sheet.
-    @Published var presentedDailyPrompt: DailyPromptKind?
+    /// When set, the main window shows the day panel alongside the chart.
+    @Published var dayEditor: DayEditorSelection?
     /// Calendars offered by the preferences picker. Empty until calendar
     /// access is granted, since EventKit vends nothing before then.
     @Published var availableCalendars: [SelectableCalendar] = []
@@ -53,6 +62,13 @@ final class WorkHistoryViewModel: ObservableObject {
     private static let autoRefreshInterval: TimeInterval = 5 * 60
 
     init() {
+        // Both stores are read here so the first paint already has the
+        // week's bars and its intentions. The refresh that follows sits
+        // behind `await CalendarStore.requestAccess()`, which can take
+        // seconds — or, seen in practice, not come back at all — and
+        // loading only there left the chart looking like a machine with no
+        // history rather than one waiting on a permission.
+        spansByDay = store.load()
         intentionsByDay = intentionStore.load()
         calendarSelection = CalendarStore.shared.selection
     }
@@ -467,50 +483,73 @@ final class WorkHistoryViewModel: ObservableObject {
     // MARK: - Daily intention / check-in
 
     func todayIntention() -> DailyIntention? {
-        intentionsByDay[dayKey(for: Date())]
+        intention(for: Date())
     }
 
-    /// Today's calendar meetings with titles, for the intention / check-in lists.
-    func todayMeetings() -> [DayMeeting] {
+    /// A day's intention / check-in, for any day — the chart's buttons and
+    /// the panel both work on whichever day you click, not just today.
+    func intention(for day: Date) -> DailyIntention? {
+        intentionsByDay[dayKey(for: day)]
+    }
+
+    /// A day's calendar meetings with titles, for the panel's list. Past
+    /// days work as well as today: EventKit keeps the events, so a day
+    /// being edited weeks later still shows what was in the diary.
+    func meetings(for day: Date) -> [DayMeeting] {
         guard calendarAccessGranted else { return [] }
-        return CalendarStore.shared.dayMeetings(on: Date())
+        return CalendarStore.shared.dayMeetings(on: day)
     }
 
-    func saveIntention(goals: String, outcomes: String) {
-        let key = dayKey(for: Date())
+    /// Writes a day's intention and check-in together, since the panel
+    /// edits both at once.
+    ///
+    /// The two timestamps record when each was *first* set, so editing an
+    /// old day's wording doesn't restamp it as though it were written
+    /// today; clearing the text back to empty drops the timestamp, which is
+    /// what returns the day's button to its unfilled state.
+    func saveDayEntry(day: Date, goals: String, outcomes: String, reflection: String) {
+        let key = dayKey(for: day)
         var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
         entry.goals = goals
         entry.outcomes = outcomes
-        entry.intentionSetAt = Date()
-        intentionsByDay = intentionStore.upsert(entry)
-        presentedDailyPrompt = nil
-    }
-
-    func saveCheckIn(reflection: String) {
-        let key = dayKey(for: Date())
-        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
         entry.checkInReflection = reflection
-        entry.checkedInAt = Date()
+
+        let hasIntentionText = !(goals + outcomes).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        entry.intentionSetAt = hasIntentionText ? (entry.intentionSetAt ?? Date()) : nil
+        let hasReflection = !reflection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        entry.checkedInAt = hasReflection ? (entry.checkedInAt ?? Date()) : nil
+
         intentionsByDay = intentionStore.upsert(entry)
-        presentedDailyPrompt = nil
     }
 
-    /// Opens the intention or check-in sheet (from menu bar / notification tap).
+    /// Opens the panel on `day`, focused on one of its two sections.
+    /// Clicking the button that's already open closes the panel again.
+    func selectDay(_ day: Date, kind: DailyPromptKind) {
+        let start = calendar.startOfDay(for: day)
+        if dayEditor == DayEditorSelection(day: start, kind: kind) {
+            dayEditor = nil
+        } else {
+            dayEditor = DayEditorSelection(day: start, kind: kind)
+        }
+    }
+
+    /// Opens today's panel (from the main button, menu bar, or a
+    /// notification tap).
     func presentDailyPrompt(_ kind: DailyPromptKind) {
-        presentedDailyPrompt = kind
+        dayEditor = DayEditorSelection(day: calendar.startOfDay(for: Date()), kind: kind)
     }
 
-    func dismissDailyPrompt() {
-        presentedDailyPrompt = nil
+    func dismissDayEditor() {
+        dayEditor = nil
     }
 
     /// Handles a tap on a daily-intention notification (`userInfo` action).
     func handleNotificationAction(_ action: String?) {
         switch action {
         case "intention":
-            presentedDailyPrompt = .intention
+            presentDailyPrompt(.intention)
         case "checkIn":
-            presentedDailyPrompt = .checkIn
+            presentDailyPrompt(.checkIn)
         default:
             break
         }
