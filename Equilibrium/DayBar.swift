@@ -63,15 +63,6 @@ struct DayBar: View {
 
     private var calendar: Calendar { .current }
 
-    private func hourFraction(_ date: Date) -> Double {
-        let comps = calendar.dateComponents([.hour, .minute], from: date)
-        return Double(comps.hour ?? 0) + Double(comps.minute ?? 0) / 60.0
-    }
-
-    private func hoursLabel(_ span: WorkdaySpan) -> String {
-        "\(span.roundedUpHours)h"
-    }
-
     private func recommendationLabel(_ recommendedHours: Double) -> String {
         if recommendedHours < 0 {
             return "over \(Int((-recommendedHours).rounded(.up)))h"
@@ -183,16 +174,6 @@ struct DayBar: View {
                 }
             }
 
-            if let span, span.hours > 0, showsHoursLabel {
-                let startFrac = ChartScale.fraction(of: hourFraction(span.start))
-                let topOffset = CGFloat(startFrac) * chartHeight
-                let isFiery = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend) > 0
-                Text(hoursLabel(span))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(isFiery ? .red : .secondary)
-                    .fixedSize()
-                    .offset(y: topOffset - 13)
-            }
         }
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
@@ -348,7 +329,11 @@ private struct MeetingBlockView: View {
 
 /// Heat for a "fiery" day — shades of red once you're over the balanced
 /// 8h line (or working a weekend). 0 = calm gray; 1 = full red.
-private enum DayFire {
+///
+/// Not private: the chart's per-day hours label is coloured by the same
+/// rule as the capsule it describes, so the two agree about which days
+/// count as fiery.
+enum DayFire {
     static let balancedHours = 8
 
     /// 0 under the line; ramps 9→0.25 … 12+→1. Any weekend work is full fire.
@@ -411,8 +396,18 @@ private struct WorkdayBlockView: View {
     @State private var drawStartY: CGFloat?
     @State private var drawCurrentY: CGFloat?
 
-    private static let edgeHandleHeight: CGFloat = 8
-    private static let splitThreshold: CGFloat = 24
+    /// Grab zones at each end of the capsule. Proportional so a short day
+    /// stays resizable — a fixed 8pt handle vanished entirely on bars under
+    /// ~80 minutes, leaving them movable but not adjustable — and bounded so
+    /// a long one still has a middle to grab.
+    private static let minHandleHeight: CGFloat = 6
+    private static let maxHandleHeight: CGFloat = 14
+    /// How far outside the capsule still counts as grabbing it.
+    private static let grabPadding: CGFloat = 4
+    /// A drag can't shrink a day below this.
+    private static let minimumDuration: TimeInterval = 15 * 60
+    /// Below this a press is a click, not a drag, and changes nothing.
+    private static let dragSlop: CGFloat = 2
     /// Movement below this (in points) counts as a click, not a draw.
     private static let tapSlop: CGFloat = 4
     private static let drawColor = Color.gray.opacity(0.5)
@@ -431,26 +426,31 @@ private struct WorkdayBlockView: View {
 
     // MARK: - Existing span: three-way edit
 
+    /// The capsule, plus one gesture covering the whole column.
+    ///
+    /// The gesture deliberately lives on this stationary container rather
+    /// than on the capsule: a `DragGesture` measures translation inside its
+    /// own view, and the capsule moves as a *result* of the drag, so
+    /// attaching it there measured each frame's movement from an origin
+    /// that had just shifted — the capsule lagged, then caught up, and
+    /// tracked the pointer unevenly. Nothing here moves while you drag, so
+    /// the numbers stay honest.
     @ViewBuilder
     private func existingSpanView(span: WorkdaySpan) -> some View {
-        let liveStart: Date = {
-            guard dragMode == .resizeTop || dragMode == .moveWhole else { return span.start }
-            return span.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
-        }()
-        let liveEnd: Date = {
-            guard dragMode == .resizeBottom || dragMode == .moveWhole else { return span.end }
-            return span.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
-        }()
+        let (liveStart, liveEnd) = previewTimes(span: span)
 
-        let startFrac = ChartScale.fraction(of: liveStart)
-        let endFrac = ChartScale.fraction(of: liveEnd)
-        let topOffset = CGFloat(startFrac) * chartHeight
-        let barHeight = CGFloat(max(endFrac - startFrac, 0)) * chartHeight
+        let topOffset = CGFloat(ChartScale.fraction(of: liveStart)) * chartHeight
+        let bottomOffset = CGFloat(ChartScale.fraction(of: liveEnd)) * chartHeight
+        let barHeight = max(bottomOffset - topOffset, 0)
 
-        let workedFraction = span.hours > 0 ? CGFloat(span.effectiveHours / span.hours) : 0
+        // Break height comes from the live duration, not the saved one:
+        // sized from the stored total, the split slid around inside the
+        // capsule as the capsule itself was resized.
+        let liveHours = liveEnd.timeIntervalSince(liveStart) / 3600
+        let breakHours = Double(span.breakMinutesUsed) / 60
+        let workedFraction = liveHours > 0 ? CGFloat(max(liveHours - breakHours, 0) / liveHours) : 0
         let workedHeight = barHeight * workedFraction
         let breakHeight = max(barHeight - workedHeight, 0)
-        let canSplitHandles = barHeight >= Self.splitThreshold
 
         let fire = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
         let workColor = DayFire.workColor(intensity: fire)
@@ -461,74 +461,123 @@ private struct WorkdayBlockView: View {
                 Capsule()
                     .fill(workColor)
                     .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
+                    .offset(y: topOffset)
             }
             if breakHeight > 0 {
                 Capsule()
                     .fill(breakColor)
                     .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
-                    .offset(y: workedHeight)
-            }
-
-            if canSplitHandles {
-                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight, span: span)
-                dragHandle(mode: .moveWhole, height: barHeight - 2 * Self.edgeHandleHeight, span: span)
-                    .offset(y: Self.edgeHandleHeight)
-                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight, span: span)
-                    .offset(y: barHeight - Self.edgeHandleHeight)
-            } else {
-                dragHandle(mode: .moveWhole, height: barHeight, span: span)
+                    .offset(y: topOffset + workedHeight)
             }
         }
-        .frame(width: barWidth, height: max(barHeight, barWidth), alignment: .top)
-        .offset(y: topOffset)
-    }
-
-    private func dragHandle(mode: DragMode, height: CGFloat, span: WorkdaySpan) -> some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: barWidth + 20, height: max(height, 1))
-            .contentShape(Rectangle())
-            #if os(macOS)
-            .background(WindowDragBlocker())
-            #endif
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        dragMode = mode
-                        dragPointsDelta = value.translation.height
+        .frame(width: barWidth + 20, height: chartHeight, alignment: .top)
+        .contentShape(Rectangle())
+        #if os(macOS)
+        .background(WindowDragBlocker())
+        #endif
+        .gesture(
+            DragGesture(minimumDistance: Self.dragSlop)
+                .onChanged { value in
+                    if dragMode == nil {
+                        dragMode = mode(forStartY: value.startLocation.y, span: span)
                     }
-                    .onEnded { value in
-                        let delta = Double(value.translation.height) * secondsPerPoint
-                        var finalStart = span.start
-                        var finalEnd = span.end
-                        switch mode {
-                        case .moveWhole:
-                            finalStart = span.start.addingTimeInterval(delta)
-                            finalEnd = span.end.addingTimeInterval(delta)
-                        case .resizeTop:
-                            finalStart = span.start.addingTimeInterval(delta)
-                        case .resizeBottom:
-                            finalEnd = span.end.addingTimeInterval(delta)
-                        }
+                    guard dragMode != nil else { return }
+                    dragPointsDelta = value.translation.height
+                }
+                .onEnded { value in
+                    defer {
                         dragMode = nil
                         dragPointsDelta = 0
-
-                        let snappedStart = snap(finalStart)
-                        let snappedEnd = snap(finalEnd)
-                        if snappedStart < snappedEnd {
-                            onChange(snappedStart, snappedEnd)
-                        }
                     }
-            )
-            #if os(macOS)
-            .onHover { hovering in
-                if hovering {
-                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
-                } else {
-                    NSCursor.pop()
+                    guard let mode = dragMode else { return }
+                    let (start, end) = times(span: span, mode: mode, deltaPoints: value.translation.height)
+                    onChange(start, end)
                 }
+        )
+        #if os(macOS)
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                switch mode(forStartY: point.y, span: span) {
+                case .resizeTop, .resizeBottom: NSCursor.resizeUpDown.set()
+                case .moveWhole: NSCursor.openHand.set()
+                case nil: NSCursor.arrow.set()
+                }
+            case .ended:
+                NSCursor.arrow.set()
             }
-            #endif
+        }
+        #endif
+    }
+
+    /// Which part of the capsule a press at `y` has hold of, or nil for a
+    /// press that missed it.
+    private func mode(forStartY y: CGFloat, span: WorkdaySpan) -> DragMode? {
+        let top = CGFloat(ChartScale.fraction(of: span.start)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: span.end)) * chartHeight
+        let height = max(bottom - top, barWidth)
+        let handle = min(Self.maxHandleHeight, max(Self.minHandleHeight, height / 3))
+
+        guard y >= top - Self.grabPadding, y <= bottom + Self.grabPadding else { return nil }
+        if y <= top + handle { return .resizeTop }
+        if y >= bottom - handle { return .resizeBottom }
+        return .moveWhole
+    }
+
+    /// What the capsule currently shows: the saved times, or the result of
+    /// the drag in progress.
+    private func previewTimes(span: WorkdaySpan) -> (Date, Date) {
+        guard let dragMode else { return (span.start, span.end) }
+        return times(span: span, mode: dragMode, deltaPoints: dragPointsDelta)
+    }
+
+    /// The one place a drag turns into times — used for both the live
+    /// capsule and the value saved on release, so what you let go of is
+    /// exactly what you get. Snapping and clamping happen here rather than
+    /// on release, which is what stopped the capsule jumping at the end of
+    /// every drag.
+    private func times(span: WorkdaySpan, mode: DragMode, deltaPoints: CGFloat) -> (Date, Date) {
+        let delta = Double(deltaPoints) * secondsPerPoint
+        var start = span.start
+        var end = span.end
+        switch mode {
+        case .moveWhole:
+            start = snap(start.addingTimeInterval(delta))
+            end = start.addingTimeInterval(span.end.timeIntervalSince(span.start))
+        case .resizeTop:
+            start = snap(start.addingTimeInterval(delta))
+        case .resizeBottom:
+            end = snap(end.addingTimeInterval(delta))
+        }
+
+        // Held inside the drawn scale, and never inverted: dragging past the
+        // other end used to be thrown away on release, so a drag that went
+        // too far simply appeared to do nothing.
+        let bounds = chartBounds()
+        switch mode {
+        case .moveWhole:
+            let duration = span.end.timeIntervalSince(span.start)
+            let earliest = bounds.lowerBound
+            let latest = bounds.upperBound.addingTimeInterval(-duration)
+            let clamped = min(max(start, earliest), max(latest, earliest))
+            return (clamped, clamped.addingTimeInterval(duration))
+        case .resizeTop:
+            let limit = end.addingTimeInterval(-Self.minimumDuration)
+            return (min(max(start, bounds.lowerBound), limit), end)
+        case .resizeBottom:
+            let limit = start.addingTimeInterval(Self.minimumDuration)
+            return (start, max(min(end, bounds.upperBound), limit))
+        }
+    }
+
+    /// The window the chart can actually draw, as real times on this day.
+    /// Outside it the capsule would stop moving while the pointer kept
+    /// going, which read as the drag sticking.
+    private func chartBounds() -> ClosedRange<Date> {
+        let midnight = Calendar.current.startOfDay(for: day)
+        let first = midnight.addingTimeInterval(ChartScale.startHour * 3600)
+        let last = midnight.addingTimeInterval(ChartScale.endHour * 3600)
+        return first...last
     }
 
     // MARK: - Empty day: accept suggestion or draw a new one
