@@ -42,6 +42,11 @@ struct ContentView: View {
                 workdayEndHour: viewModel.preferences.workdayEndHour,
                 weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
+                weekLabel: viewModel.visibleWeekLabel,
+                canShowPreviousWeek: viewModel.canShowPreviousWeek,
+                canShowNextWeek: viewModel.canShowNextWeek,
+                onShowPreviousWeek: { viewModel.showPreviousWeek() },
+                onShowNextWeek: { viewModel.showNextWeek() },
                 onMeetingChange: { day, meetingID, newStart, newEnd in
                     viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
@@ -96,7 +101,7 @@ struct ContentView: View {
     }
 
     private var days: [Date] {
-        viewModel.rollingWindowDays(weeks: 2)
+        viewModel.visibleWeekDays
     }
 
     /// One control: morning intention until it's set, then end-of-day check-in.

@@ -24,7 +24,13 @@ struct EquilibriumApp: App {
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 520, maxHeight: 520)
+                // Sized for seven day columns, not fourteen: at 420pt each
+                // column is ~44pt, comfortably more than the 28pt an 18pt
+                // bar and its workday track need. The 560pt ceiling is what
+                // shrinks windows that macOS restores at the old two-week
+                // width — without it they'd stay needlessly wide, with the
+                // week's bars stranded far apart.
+                .frame(minWidth: 360, idealWidth: 420, maxWidth: 560, minHeight: 520, maxHeight: 520)
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)

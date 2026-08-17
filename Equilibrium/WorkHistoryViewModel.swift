@@ -30,6 +30,12 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var availableCalendars: [SelectableCalendar] = []
     /// Which calendar is read, or `nil` while the user hasn't picked one.
     @Published var calendarSelection: String?
+    /// Which week the chart shows, counted from the current one: 0 is this
+    /// week, -1 last week. The chart is deliberately one week at a time —
+    /// the week is the unit everything else here works in (the target, the
+    /// recommendation, the weekly summary) — so history is reached by
+    /// paging rather than by widening the window.
+    @Published private(set) var weekOffset: Int = 0
 
     private let store = WorkHistoryStore()
     private let intentionStore = DailyIntentionStore()
@@ -129,36 +135,34 @@ final class WorkHistoryViewModel: ObservableObject {
         }
     }
 
-    /// Regenerates the LLM "You worked ..." caption for each week currently
-    /// shown in the chart (mirrors `DailyBarChartView`'s own 7-day grouping
-    /// of the same rolling window). Skips any week whose `WeekHeaderStats`
-    /// haven't changed since the last generation, so an unchanged week
-    /// doesn't re-invoke the model on every 5-minute auto-refresh. Silently
-    /// does nothing if Foundation Models isn't available.
+    /// Regenerates the LLM "You worked ..." caption for the week the chart
+    /// is currently showing. Skips the work when that week's
+    /// `WeekHeaderStats` haven't changed since the last generation, so an
+    /// unchanged week doesn't re-invoke the model on every 5-minute auto
+    /// refresh — and so paging back and forth through weeks reuses what's
+    /// already been generated rather than asking again. Silently does
+    /// nothing if Foundation Models isn't available.
     func refreshWeekHeaderSummaries() {
         guard WeeklyInsightGenerator.isAvailable else { return }
         guard #available(macOS 26.0, *) else { return }
 
-        let days = rollingWindowDays(weeks: 2)
-        for weekStart in stride(from: 0, to: days.count, by: 7) {
-            let week = Array(days[weekStart..<min(weekStart + 7, days.count)])
-            guard let first = week.first else { continue }
-            let key = dayKey(for: first)
+        let week = visibleWeekDays
+        guard let first = week.first else { return }
+        let key = dayKey(for: first)
 
-            guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(
-                from: week.map { span(for: $0) },
-                weeklyTargetHours: preferences.weeklyTargetHours
-            ) else {
-                lastWeekHeaderStats[key] = nil
-                weekHeaderSummaries[key] = nil
-                continue
-            }
-            guard lastWeekHeaderStats[key] != stats else { continue }
-            lastWeekHeaderStats[key] = stats
+        guard let stats = WeeklyInsightGenerator.WeekHeaderStats.compute(
+            from: week.map { span(for: $0) },
+            weeklyTargetHours: preferences.weeklyTargetHours
+        ) else {
+            lastWeekHeaderStats[key] = nil
+            weekHeaderSummaries[key] = nil
+            return
+        }
+        guard lastWeekHeaderStats[key] != stats else { return }
+        lastWeekHeaderStats[key] = stats
 
-            Task {
-                weekHeaderSummaries[key] = await WeeklyInsightGenerator.generateWeekHeaderSummary(for: stats)
-            }
+        Task {
+            weekHeaderSummaries[key] = await WeeklyInsightGenerator.generateWeekHeaderSummary(for: stats)
         }
     }
 
@@ -354,11 +358,52 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
     }
 
-    /// A rolling window of full Sat-Fri weeks ending with the current week
-    /// (including its future days), covering `weeks` weeks total. Weeks
-    /// start on Saturday (European style): Sat, Sun, Mon, Tue, Wed, Thu, Fri.
-    func rollingWindowDays(weeks: Int) -> [Date] {
-        WeekCalendar.rollingWindowDays(weeks: weeks, calendar: calendar)
+    /// The week the chart is showing: a full Sat-Fri range (European-style
+    /// weeks: Sat, Sun, Mon, Tue, Wed, Thu, Fri), including future days.
+    var visibleWeekDays: [Date] {
+        WeekCalendar.weekDays(offset: weekOffset, calendar: calendar)
+    }
+
+    /// How the visible week is named in the chart's navigation: the two
+    /// most recent weeks get a relative name, since that's how you'd refer
+    /// to them; older ones get their date range.
+    var visibleWeekLabel: String {
+        switch weekOffset {
+        case 0: return "This week"
+        case -1: return "Last week"
+        default:
+            guard let first = visibleWeekDays.first, let last = visibleWeekDays.last else { return "" }
+            let month = DateFormatter()
+            month.dateFormat = "MMM d"
+            let dayOnly = DateFormatter()
+            dayOnly.dateFormat = "d"
+            let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
+            return "\(month.string(from: first)) – \(sameMonth ? dayOnly.string(from: last) : month.string(from: last))"
+        }
+    }
+
+    /// Paging back stops at the week holding the oldest day on record —
+    /// there's nothing before it but empty charts.
+    var canShowPreviousWeek: Bool {
+        guard let earliest = spansByDay.keys.min(), let earliestDay = dayKeyFormatter.date(from: earliest) else {
+            return false
+        }
+        return earliestDay < WeekCalendar.weekStart(offset: weekOffset, calendar: calendar)
+    }
+
+    /// Paging forward stops at the current week; there's no data ahead of it.
+    var canShowNextWeek: Bool { weekOffset < 0 }
+
+    func showPreviousWeek() {
+        guard canShowPreviousWeek else { return }
+        weekOffset -= 1
+        refreshWeekHeaderSummaries()
+    }
+
+    func showNextWeek() {
+        guard canShowNextWeek else { return }
+        weekOffset += 1
+        refreshWeekHeaderSummaries()
     }
 
     /// This week's full Saturday-through-Friday range, including future days.
