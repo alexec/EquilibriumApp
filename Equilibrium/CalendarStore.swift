@@ -8,7 +8,61 @@ final class CalendarStore {
 
     private let store = EKEventStore()
 
-    private init() {}
+    /// Identifiers of the calendars to read, or `nil` to read all of them.
+    /// Seeded from `CalendarSelectionStore` and updated when the user edits
+    /// the picker in preferences.
+    private var selectedIdentifiers: Set<String>?
+
+    private init() {
+        selectedIdentifiers = CalendarSelectionStore.load()
+    }
+
+    // MARK: - Calendar selection
+
+    /// The calendars the user can choose between, grouped-ready (sorted by
+    /// account, then title). Returns `[]` when access hasn't been granted.
+    func availableCalendars() -> [SelectableCalendar] {
+        store.calendars(for: .event)
+            .map { calendar in
+                SelectableCalendar(
+                    id: calendar.calendarIdentifier,
+                    title: calendar.title,
+                    sourceTitle: calendar.source?.title ?? "Other",
+                    colorComponents: calendar.cgColor?.components.map { $0.map(Double.init) }
+                )
+            }
+            .sorted {
+                $0.sourceTitle == $1.sourceTitle
+                    ? $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                    : $0.sourceTitle.localizedCaseInsensitiveCompare($1.sourceTitle) == .orderedAscending
+            }
+    }
+
+    /// The current selection, or `nil` if the user has never narrowed it.
+    var selection: Set<String>? { selectedIdentifiers }
+
+    /// Records an explicit calendar selection. Pass `nil` to revert to
+    /// reading every calendar.
+    func updateSelection(_ identifiers: Set<String>?) {
+        selectedIdentifiers = identifiers
+        if let identifiers {
+            CalendarSelectionStore.save(identifiers)
+        } else {
+            CalendarSelectionStore.clear()
+        }
+    }
+
+    /// Resolves `selectedIdentifiers` to live `EKCalendar` objects for use as
+    /// a query predicate's scope.
+    ///
+    /// Returns `nil` — meaning "every calendar" to EventKit — only when the
+    /// user has made no explicit choice. Identifiers that no longer resolve
+    /// (a calendar deleted or unsubscribed since it was picked) are dropped,
+    /// so a stale entry narrows the query rather than breaking it.
+    private func scopedCalendars() -> [EKCalendar]? {
+        guard let selectedIdentifiers else { return nil }
+        return selectedIdentifiers.compactMap { store.calendar(withIdentifier: $0) }
+    }
 
     // MARK: - Permission
 
@@ -46,10 +100,17 @@ final class CalendarStore {
             return []
         }
 
+        // An explicit selection that resolves to no calendars means "read
+        // nothing". Short-circuit rather than passing an empty array to
+        // EventKit, which documents only `nil` as the all-calendars value
+        // and leaves the empty case undefined.
+        let scope = scopedCalendars()
+        if let scope, scope.isEmpty { return [] }
+
         let predicate = store.predicateForEvents(
             withStart: startOfDay,
             end: endOfDay,
-            calendars: nil
+            calendars: scope
         )
 
         return store.events(matching: predicate).filter { event in

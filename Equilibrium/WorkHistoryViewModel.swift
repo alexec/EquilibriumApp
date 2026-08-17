@@ -25,6 +25,11 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var intentionsByDay: [String: DailyIntention] = [:]
     /// When set, the main window presents the matching intention / check-in sheet.
     @Published var presentedDailyPrompt: DailyPromptKind?
+    /// Calendars offered by the preferences picker. Empty until calendar
+    /// access is granted, since EventKit vends nothing before then.
+    @Published var availableCalendars: [SelectableCalendar] = []
+    /// Which calendars are read, or `nil` while the user hasn't narrowed it.
+    @Published var calendarSelection: Set<String>?
 
     private let store = WorkHistoryStore()
     private let intentionStore = DailyIntentionStore()
@@ -43,6 +48,7 @@ final class WorkHistoryViewModel: ObservableObject {
 
     init() {
         intentionsByDay = intentionStore.load()
+        calendarSelection = CalendarStore.shared.selection
     }
 
     /// The `WeekHeaderStats` each week's summary was last generated from,
@@ -59,7 +65,20 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Requests calendar access and kicks off the first data refresh.
     func requestCalendarAccessAndRefresh() async {
         calendarAccessGranted = await CalendarStore.shared.requestAccess()
+        if calendarAccessGranted {
+            availableCalendars = CalendarStore.shared.availableCalendars()
+        }
         refresh()
+    }
+
+    /// Records a new calendar selection and re-reads meeting data so days
+    /// annotated from a now-deselected calendar drop their meetings
+    /// immediately, rather than lingering until the next auto-refresh.
+    func updateCalendarSelection(_ identifiers: Set<String>?) {
+        CalendarStore.shared.updateSelection(identifiers)
+        calendarSelection = identifiers
+        guard calendarAccessGranted else { return }
+        Task { await refreshMeetingData() }
     }
 
     /// Starts IOKit power-notification monitoring and the periodic refresh
@@ -151,24 +170,53 @@ final class WorkHistoryViewModel: ObservableObject {
         weekHeaderSummaries[dayKey(for: day)]
     }
 
-    /// Re-reads calendar events for worked days (clipped to each span) and
-    /// for remaining days in the current week (full-day, so future days
-    /// without a work capsule still show meetings). Days with hand-dragged
-    /// meetings (`meetingsManuallyEdited`) are left alone — see
-    /// `updateMeeting`.
+    /// Re-reads calendar events for every stored day (clipped to the workday
+    /// span when there is one, full-day otherwise) and for remaining days in
+    /// the current week, so future days without a work capsule still show
+    /// meetings. Days with hand-dragged meetings (`meetingsManuallyEdited`)
+    /// are left alone — see `updateMeeting`.
+    ///
+    /// Zero-hour days are re-read too, not just worked ones. They can hold
+    /// meetings (a day full of calls but no tracked activity), and if they
+    /// were skipped their meetings would be frozen forever — most visibly
+    /// after deselecting a calendar in preferences, where its events would
+    /// linger on exactly those days.
     @MainActor
     func refreshMeetingData() async {
         var updated = spansByDay
         let today = calendar.startOfDay(for: Date())
 
-        // Worked days: clip meetings to the actual workday span.
         for (key, span) in spansByDay {
-            guard span.hours > 0 else { continue }
             guard !span.meetingsManuallyEdited else { continue }
             guard let date = dayKeyFormatter.date(from: key) else { continue }
-            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+
+            // Clip to the workday only when one was actually tracked;
+            // a zero-hour day would clip every meeting away to nothing.
+            let hasWorkday = span.hours > 0
+            let events = hasWorkday
+                ? CalendarStore.shared.meetingEvents(on: date, span: span)
+                : CalendarStore.shared.meetingEvents(on: date)
+            let meetings = hasWorkday
+                ? MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+                : MeetingCalculator.mergedBlocks(from: events)
+
+            // A zero-hour day whose meetings have all gone carries nothing
+            // worth keeping, so drop the row rather than leaving an empty
+            // placeholder bar. Manual overrides are the exception: the user
+            // put that day there deliberately.
+            //
+            // Only today onward, matching the current-week pass below.
+            // Nothing ever re-scans a past date that isn't already stored,
+            // so dropping one would be permanent — re-selecting a calendar
+            // in preferences could never bring that day back. Past days keep
+            // their (now empty) row instead, which renders the same as no row.
+            if meetings.isEmpty, !hasWorkday, !span.isManual, date >= today {
+                updated.removeValue(forKey: key)
+                continue
+            }
+
             var annotated = span
-            annotated.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            annotated.meetings = meetings
             annotated.hasCalendarData = true
             updated[key] = annotated
         }

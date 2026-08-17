@@ -22,7 +22,12 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .popover(isPresented: $showsPreferences) {
-                    PreferencesView(current: viewModel.preferences) { updated in
+                    PreferencesView(
+                        current: viewModel.preferences,
+                        calendars: viewModel.availableCalendars,
+                        calendarSelection: viewModel.calendarSelection,
+                        onCalendarSelectionChange: { viewModel.updateCalendarSelection($0) }
+                    ) { updated in
                         viewModel.updatePreferences(updated)
                         showsPreferences = false
                     }
