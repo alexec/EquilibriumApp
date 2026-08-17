@@ -162,7 +162,14 @@ final class WorkHistoryViewModel: ObservableObject {
         lastWeekHeaderStats[key] = stats
 
         Task {
-            weekHeaderSummaries[key] = await WeeklyInsightGenerator.generateWeekHeaderSummary(for: stats)
+            let summary = await WeeklyInsightGenerator.generateWeekHeaderSummary(for: stats)
+            // Generation takes seconds, and the week's figures can change
+            // while it runs — an edited day, an auto-refresh. If they have,
+            // a newer generation is already under way and this sentence
+            // describes numbers the bars no longer show, so it's dropped
+            // rather than left on screen until the figures next change.
+            guard lastWeekHeaderStats[key] == stats else { return }
+            weekHeaderSummaries[key] = summary
         }
     }
 
