@@ -1,10 +1,19 @@
 import Foundation
 import Combine
 
-/// Which daily-intention sheet the main window should present, if any.
+/// The two things recorded against a day: a morning intention and an
+/// end-of-day check-in.
 enum DailyPromptKind: Equatable {
     case intention
     case checkIn
+}
+
+/// The day the side panel is editing, and which of its two sections asked
+/// to be edited — the panel always shows both, so the kind only decides
+/// where the keyboard focus lands.
+struct DayEditorSelection: Equatable {
+    let day: Date
+    var kind: DailyPromptKind
 }
 
 @MainActor
@@ -23,8 +32,10 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
-    /// When set, the main window presents the matching intention / check-in sheet.
-    @Published var presentedDailyPrompt: DailyPromptKind?
+    /// The day shown in the panel beside the chart. Always set — the panel
+    /// is permanent furniture rather than something you open — so this
+    /// starts on today and only ever moves to another day.
+    @Published var dayEditor = DayEditorSelection(day: Calendar.current.startOfDay(for: Date()), kind: .intention)
     /// Calendars offered by the preferences picker. Empty until calendar
     /// access is granted, since EventKit vends nothing before then.
     @Published var availableCalendars: [SelectableCalendar] = []
@@ -53,6 +64,13 @@ final class WorkHistoryViewModel: ObservableObject {
     private static let autoRefreshInterval: TimeInterval = 5 * 60
 
     init() {
+        // Both stores are read here so the first paint already has the
+        // week's bars and its intentions. The refresh that follows sits
+        // behind `await CalendarStore.requestAccess()`, which can take
+        // seconds — or, seen in practice, not come back at all — and
+        // loading only there left the chart looking like a machine with no
+        // history rather than one waiting on a permission.
+        spansByDay = store.load()
         intentionsByDay = intentionStore.load()
         calendarSelection = CalendarStore.shared.selection
     }
@@ -371,18 +389,19 @@ final class WorkHistoryViewModel: ObservableObject {
         WeekCalendar.weekDays(offset: weekOffset, calendar: calendar)
     }
 
-    /// How the visible week is named in the chart's navigation: the two
-    /// most recent weeks get a relative name, since that's how you'd refer
-    /// to them; older ones get their date range.
-    var visibleWeekLabel: String {
+    /// How a week is named in the chart's navigation: the two most recent
+    /// weeks get a relative name, since that's how you'd refer to them;
+    /// older ones get their date range.
+    ///
+    /// Takes the week rather than deriving its own, so the name always
+    /// describes the bars actually on screen. Deriving it here would mean a
+    /// second reading of "now", which around midnight can land in a
+    /// different week from the one the chart drew.
+    func weekLabel(for week: [Date]) -> String {
         switch weekOffset {
         case 0: return "This week"
         case -1: return "Last week"
         default:
-            // One computation of the week, not two: each call re-derives the
-            // range from "now", so asking twice could straddle midnight and
-            // label a range whose ends come from different weeks.
-            let week = visibleWeekDays
             guard let first = week.first, let last = week.last else { return "" }
             let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
             let end = sameMonth ? Self.dayOnlyFormatter : Self.monthDayFormatter
@@ -390,7 +409,7 @@ final class WorkHistoryViewModel: ObservableObject {
         }
     }
 
-    // Built once and reused: SwiftUI reads `visibleWeekLabel` on every pass
+    // Built once and reused: SwiftUI reads `weekLabel(for:)` on every pass
     // over the chart's body, and a DateFormatter is expensive enough that
     // constructing two per read is worth avoiding. Confined to the main
     // actor with the rest of the class, so sharing them is safe.
@@ -421,13 +440,26 @@ final class WorkHistoryViewModel: ObservableObject {
     func showPreviousWeek() {
         guard canShowPreviousWeek else { return }
         weekOffset -= 1
+        moveSelectionWithWeek(days: -7)
         refreshWeekHeaderSummaries()
     }
 
     func showNextWeek() {
         guard canShowNextWeek else { return }
         weekOffset += 1
+        moveSelectionWithWeek(days: 7)
         refreshWeekHeaderSummaries()
+    }
+
+    /// Keeps the panel on the week the chart is showing, landing on the same
+    /// weekday: paging back from Monday shows the Monday before it. Without
+    /// this the panel would sit on a day that isn't among the bars beside
+    /// it, its highlighted column nowhere on screen.
+    private func moveSelectionWithWeek(days: Int) {
+        guard let moved = calendar.date(byAdding: .day, value: days, to: dayEditor.day) else { return }
+        // Paging forward can land past today, which has no check-in to make;
+        // the panel handles that by hiding the section, so only the day moves.
+        dayEditor = DayEditorSelection(day: moved, kind: dayEditor.kind)
     }
 
     /// This week's full Saturday-through-Friday range, including future days.
@@ -466,51 +498,72 @@ final class WorkHistoryViewModel: ObservableObject {
 
     // MARK: - Daily intention / check-in
 
-    func todayIntention() -> DailyIntention? {
-        intentionsByDay[dayKey(for: Date())]
+    /// A day's intention / check-in, for any day — the chart's buttons and
+    /// the panel both work on whichever day you click, not just today.
+    func intention(for day: Date) -> DailyIntention? {
+        intentionsByDay[dayKey(for: day)]
     }
 
-    /// Today's calendar meetings with titles, for the intention / check-in lists.
-    func todayMeetings() -> [DayMeeting] {
+    /// A day's calendar meetings with titles, for the panel's list. Past
+    /// days work as well as today: EventKit keeps the events, so a day
+    /// being edited weeks later still shows what was in the diary.
+    func meetings(for day: Date) -> [DayMeeting] {
         guard calendarAccessGranted else { return [] }
-        return CalendarStore.shared.dayMeetings(on: Date())
+        return CalendarStore.shared.dayMeetings(on: day)
     }
 
-    func saveIntention(goals: String, outcomes: String) {
-        let key = dayKey(for: Date())
-        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+    /// Writes a day's intention and check-in together, since the panel
+    /// edits both at once.
+    ///
+    /// The two timestamps record when each was *first* set, so editing an
+    /// old day's wording doesn't restamp it as though it were written
+    /// today; clearing the text back to empty drops the timestamp, which is
+    /// what returns the day's button to its unfilled state.
+    func saveDayEntry(day: Date, goals: String, outcomes: String, reflection: String) {
+        let key = dayKey(for: day)
+        let existing = intentionsByDay[key]
+
+        // Opening a day and moving on without typing shouldn't leave a
+        // record behind. With auto-save, closing the panel always writes,
+        // so without this every day merely glanced at would be stored as an
+        // empty entry.
+        let isBlank = (goals + outcomes + reflection).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard existing != nil || !isBlank else { return }
+
+        var entry = existing ?? DailyIntention(dayKey: key)
         entry.goals = goals
         entry.outcomes = outcomes
-        entry.intentionSetAt = Date()
-        intentionsByDay = intentionStore.upsert(entry)
-        presentedDailyPrompt = nil
-    }
-
-    func saveCheckIn(reflection: String) {
-        let key = dayKey(for: Date())
-        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
         entry.checkInReflection = reflection
-        entry.checkedInAt = Date()
+
+        let hasIntentionText = !(goals + outcomes).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        entry.intentionSetAt = hasIntentionText ? (entry.intentionSetAt ?? Date()) : nil
+        let hasReflection = !reflection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        entry.checkedInAt = hasReflection ? (entry.checkedInAt ?? Date()) : nil
+
+        // Auto-save fires on every close as well as on a debounce, so most
+        // calls have nothing new in them; rewriting the file anyway would be
+        // churn for no change.
+        guard entry != existing else { return }
         intentionsByDay = intentionStore.upsert(entry)
-        presentedDailyPrompt = nil
     }
 
-    /// Opens the intention or check-in sheet (from menu bar / notification tap).
+    /// Points the panel at `day`, focused on one of its two sections.
+    func selectDay(_ day: Date, kind: DailyPromptKind) {
+        dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
+    }
+
+    /// Points the panel at today (from the menu bar or a notification tap).
     func presentDailyPrompt(_ kind: DailyPromptKind) {
-        presentedDailyPrompt = kind
-    }
-
-    func dismissDailyPrompt() {
-        presentedDailyPrompt = nil
+        selectDay(Date(), kind: kind)
     }
 
     /// Handles a tap on a daily-intention notification (`userInfo` action).
     func handleNotificationAction(_ action: String?) {
         switch action {
         case "intention":
-            presentedDailyPrompt = .intention
+            presentDailyPrompt(.intention)
         case "checkIn":
-            presentedDailyPrompt = .checkIn
+            presentDailyPrompt(.checkIn)
         default:
             break
         }

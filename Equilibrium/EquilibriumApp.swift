@@ -21,16 +21,31 @@ struct EquilibriumApp: App {
         DailyIntentionNotifier.reschedule(preferences: viewModel.preferences)
     }
 
+    /// The day panel's contribution to the window's width. It's always on
+    /// screen, so this is a constant — the window is simply that much wider
+    /// than the chart it holds.
+    private let panelWidth = DayDetailPanel.width + 16
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(viewModel: viewModel)
                 // Sized for seven day columns, not fourteen: at 420pt each
                 // column is ~44pt, comfortably more than the 28pt an 18pt
-                // bar and its workday track need. The 560pt ceiling is what
-                // shrinks windows that macOS restores at the old two-week
-                // width — without it they'd stay needlessly wide, with the
-                // week's bars stranded far apart.
-                .frame(minWidth: 360, idealWidth: 420, maxWidth: 560, minHeight: 520, maxHeight: 520)
+                // bar and its workday track need. The ceiling is what
+                // shrinks windows macOS restores at the old two-week width —
+                // without it they'd stay needlessly wide, with the week's
+                // bars stranded far apart.
+                //
+                // Every bound carries the day panel's width on top of that,
+                // so resizing changes what the chart gets and leaves the
+                // panel alone — it holds text at a fixed, readable measure.
+                .frame(
+                    minWidth: 360 + panelWidth,
+                    idealWidth: 420 + panelWidth,
+                    maxWidth: 560 + panelWidth,
+                    minHeight: 520,
+                    maxHeight: 520
+                )
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)

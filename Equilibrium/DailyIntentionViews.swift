@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shared time formatter for meeting rows in intention / check-in sheets.
+/// Shared time formatter for the panel's meeting rows.
 enum MeetingTimeFormat {
     static let range: DateFormatter = {
         let formatter = DateFormatter()
@@ -13,96 +13,232 @@ enum MeetingTimeFormat {
     }
 }
 
-/// First step of the morning flow: today's meetings, then goals and outcomes.
-struct IntentionView: View {
+/// One day's meetings, intention and check-in, edited in a panel beside the
+/// chart rather than in a modal sheet. Living next to the bars is what
+/// makes editing an *old* day sensible: you pick the day in the chart and
+/// its detail appears alongside, instead of a dialog that only ever knew
+/// about today.
+///
+/// Both sections are always present — a day's intention and how it actually
+/// went belong on screen together, particularly when looking back — so
+/// which button was clicked only decides where the cursor starts.
+struct DayDetailPanel: View {
+    let day: Date
     let meetings: [DayMeeting]
     let existing: DailyIntention?
-    let onSave: (String, String) -> Void
-    let onCancel: () -> Void
+    /// Check-ins are hidden for days that haven't happened: there's nothing
+    /// to reflect on yet. Intentions stay editable, so tomorrow can be
+    /// planned today.
+    let allowsCheckIn: Bool
+    /// Distinguishes a day with no meetings from one whose meetings simply
+    /// can't be read yet — without it, an unanswered permission prompt
+    /// looks exactly like an empty diary.
+    let calendarAccessGranted: Bool
+    let initialFocus: DailyPromptKind
+    let onSave: (String, String, String) -> Void
 
     @State private var goals: String
     @State private var outcomes: String
+    @State private var reflection: String
+    @FocusState private var focusedField: Field?
+    /// The pending debounced write; cancelled and replaced on each keystroke.
+    @State private var saveTask: Task<Void, Never>?
+
+    private enum Field {
+        case goals
+        case reflection
+    }
 
     init(
+        day: Date,
         meetings: [DayMeeting],
         existing: DailyIntention?,
-        onSave: @escaping (String, String) -> Void,
-        onCancel: @escaping () -> Void
+        allowsCheckIn: Bool,
+        calendarAccessGranted: Bool,
+        initialFocus: DailyPromptKind,
+        onSave: @escaping (String, String, String) -> Void
     ) {
+        self.day = day
         self.meetings = meetings
         self.existing = existing
+        self.allowsCheckIn = allowsCheckIn
+        self.calendarAccessGranted = calendarAccessGranted
+        self.initialFocus = initialFocus
         self.onSave = onSave
-        self.onCancel = onCancel
         _goals = State(initialValue: existing?.goals ?? "")
         _outcomes = State(initialValue: existing?.outcomes ?? "")
+        _reflection = State(initialValue: existing?.checkInReflection ?? "")
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Today's intention")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 0) {
+            header
 
-            meetingsSection
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        meetingsSection
 
-            Divider()
+                        Divider()
 
-            field(title: "Goals", prompt: "What do you want to accomplish?", text: $goals)
-            field(title: "Outcomes", prompt: "What does success look like by end of day?", text: $outcomes)
+                        sectionHeader("Intention", symbol: "sun.max")
+                            .id(Field.goals)
+                        field(title: "Goals", prompt: "What do you want to accomplish?", text: $goals)
+                            .focused($focusedField, equals: .goals)
+                            .onChange(of: goals) { _ in scheduleSave() }
+                        field(title: "Outcomes", prompt: "What does success look like?", text: $outcomes)
+                            .onChange(of: outcomes) { _ in scheduleSave() }
 
-            HStack {
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Save intention") {
-                    onSave(goals, outcomes)
+                        if allowsCheckIn {
+                            Divider()
+
+                            sectionHeader("Check-in", symbol: "moon")
+                            field(
+                                title: "How did it go?",
+                                prompt: "What landed, what didn't, what to carry forward?",
+                                text: $reflection,
+                                lines: 3...6
+                            )
+                            .focused($focusedField, equals: .reflection)
+                            .id(Field.reflection)
+                            .onChange(of: reflection) { _ in scheduleSave() }
+                        }
+                    }
+                    .padding(.vertical, 12)
                 }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canSave)
+                .onAppear { applyInitialFocus(proxy: proxy) }
+                // The panel is rebuilt per day (see its `.id` at the call
+                // site), but clicking the other button on the *same* day only
+                // changes the kind, so the focus has to follow that too.
+                .onChange(of: initialFocus) { _ in applyInitialFocus(proxy: proxy) }
             }
         }
-        .padding(20)
-        .frame(width: 360)
+        // Whatever is still pending is written before this panel goes away —
+        // closing it, switching to another day, or the window shutting all
+        // land here, so nothing typed is lost by navigating away.
+        .onDisappear {
+            saveTask?.cancel()
+            onSave(goals, outcomes, reflection)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .frame(width: Self.width)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.primary.opacity(0.06))
+        )
     }
 
-    private var canSave: Bool {
-        !goals.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !outcomes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    static let width: CGFloat = 280
+
+    /// There's no Save button: the panel isn't a dialog you finish with, so
+    /// typing is the whole interaction. Writes are debounced rather than
+    /// per-keystroke because each one rewrites the whole intentions file,
+    /// and the day's button filling in the chart is the confirmation.
+    private static let saveDebounce: Duration = .milliseconds(500)
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
+            try? await Task.sleep(for: Self.saveDebounce)
+            guard !Task.isCancelled else { return }
+            onSave(goals, outcomes, reflection)
+        }
+    }
+
+    /// Puts the cursor in the section whose button was clicked and scrolls
+    /// it into view — on a day with a full diary the check-in starts below
+    /// the fold, and focus alone would leave you typing into a field you
+    /// can't see.
+    ///
+    /// Deferred a runloop turn: setting `@FocusState` while the panel is
+    /// still being placed doesn't take — the field it names isn't in the
+    /// hierarchy yet, and the focus is dropped.
+    private func applyInitialFocus(proxy: ScrollViewProxy) {
+        let field: Field = (initialFocus == .checkIn && allowsCheckIn) ? .reflection : .goals
+        DispatchQueue.main.async {
+            focusedField = field
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(field, anchor: field == .reflection ? .bottom : .top)
+            }
+        }
+    }
+
+    /// No close button: the panel is always on screen, so the only thing
+    /// that changes is which day it's showing.
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(Self.dayTitle(day))
+                .font(.system(size: 13, weight: .semibold))
+            Spacer()
+        }
+        .padding(.top, 16)
+    }
+
+    private func sectionHeader(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .font(.system(size: 10))
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(.secondary)
     }
 
     private var meetingsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Meetings today")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
+            sectionHeader("Meetings", symbol: "calendar")
 
             if meetings.isEmpty {
-                Text("No meetings on the calendar.")
+                Text(calendarAccessGranted ? "No meetings on the calendar." : "Waiting on calendar access.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(meetings) { meeting in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
-                                .font(.system(size: 11).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 110, alignment: .leading)
-                            Text(meeting.title)
-                                .font(.system(size: 12))
-                                .lineLimit(2)
-                        }
-                    }
+            } else if meetings.count > Self.meetingsShownInFull {
+                // A heavy day's diary would otherwise push the intention and
+                // check-in off the bottom of the panel — the two things this
+                // is for. Past this many, the list scrolls within its own
+                // fixed height and the fields below stay put.
+                ScrollView {
+                    meetingRows
                 }
+                .frame(height: Self.longMeetingListHeight)
+            } else {
+                meetingRows
             }
         }
     }
 
-    private func field(title: String, prompt: String, text: Binding<String>) -> some View {
+    private static let meetingsShownInFull = 4
+    private static let longMeetingListHeight: CGFloat = 132
+
+    private var meetingRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(meetings) { meeting in
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(meeting.title)
+                        .font(.system(size: 12))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func field(
+        title: String,
+        prompt: String,
+        text: Binding<String>,
+        lines: ClosedRange<Int> = 2...4
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
             TextField(prompt, text: text, axis: .vertical)
-                .lineLimit(2...4)
+                .lineLimit(lines)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .padding(8)
@@ -112,129 +248,15 @@ struct IntentionView: View {
                 )
         }
     }
-}
 
-/// End-of-day check-in: meetings, morning intention, then a short reflection.
-struct CheckInView: View {
-    let meetings: [DayMeeting]
-    let intention: DailyIntention?
-    let onSave: (String) -> Void
-    let onCancel: () -> Void
-
-    @State private var reflection: String
-
-    init(
-        meetings: [DayMeeting],
-        intention: DailyIntention?,
-        onSave: @escaping (String) -> Void,
-        onCancel: @escaping () -> Void
-    ) {
-        self.meetings = meetings
-        self.intention = intention
-        self.onSave = onSave
-        self.onCancel = onCancel
-        _reflection = State(initialValue: intention?.checkInReflection ?? "")
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("End-of-day check-in")
-                .font(.headline)
-
-            meetingsSection
-
-            Divider()
-
-            intentionSection
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("How did it go?")
-                    .font(.system(size: 12, weight: .medium))
-                TextField("What landed, what didn't, what to carry forward?", text: $reflection, axis: .vertical)
-                    .lineLimit(3...6)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .padding(8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.primary.opacity(0.05))
-                    )
-            }
-
-            HStack {
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Save check-in") {
-                    onSave(reflection)
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(reflection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+    /// "Today" for today, otherwise the weekday and date — enough to be
+    /// sure which bar the panel belongs to.
+    static func dayTitle(_ day: Date, today: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(day, inSameDayAs: today) {
+            return "Today"
         }
-        .padding(20)
-        .frame(width: 360)
-    }
-
-    private var meetingsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Meetings today")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            if meetings.isEmpty {
-                Text("No meetings on the calendar.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(meetings) { meeting in
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
-                                .font(.system(size: 11).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 110, alignment: .leading)
-                            Text(meeting.title)
-                                .font(.system(size: 12))
-                                .lineLimit(2)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var intentionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("This morning's intention")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            if let intention, intention.hasIntention {
-                if !intention.goals.isEmpty {
-                    labeledBlock(title: "Goals", body: intention.goals)
-                }
-                if !intention.outcomes.isEmpty {
-                    labeledBlock(title: "Outcomes", body: intention.outcomes)
-                }
-            } else {
-                Text("No intention was set today.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func labeledBlock(title: String, body: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-            Text(body)
-                .font(.system(size: 12))
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = calendar.isDate(day, equalTo: today, toGranularity: .year) ? "EEEE d MMM" : "EEE d MMM yyyy"
+        return formatter.string(from: day)
     }
 }

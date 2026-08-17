@@ -113,8 +113,9 @@ enum WeeklyInsightGenerator {
             comparison against target is what matters. Never invent numbers \
             that weren't given to you. When a duration is a half hour, \
             write it with the ½ symbol (e.g. "3½h"), never "3.5h" or "three and \
-            a half hours". Use ordinary sentence case throughout: never put a \
-            word in capitals for emphasis. No markdown, no emoji, no \
+            a half hours". State each duration once — never restate the same \
+            amount a second way. Use ordinary sentence case throughout: never \
+            put a word in capitals for emphasis. No markdown, no emoji, no \
             exclamation marks, no preamble like "Here's" — just the sentence \
             itself.
             """
@@ -128,7 +129,9 @@ enum WeeklyInsightGenerator {
         var lines = [
             "Average per weekday in the week shown:",
             "Work: \(HoursFormat.string(stats.workAvgHours))",
-            "Target: \(HoursFormat.string(stats.targetHoursPerDay))",
+            // Spelled out as a per-weekday rate: labelled just "Target" the
+            // model has described it as the target "for the week".
+            "Target per weekday: \(HoursFormat.string(stats.targetHoursPerDay))",
             "Versus target: \(stats.targetComparison)",
         ]
         if let meeting = stats.meetingAvgHours {

@@ -5,6 +5,50 @@ struct ContentView: View {
     @State private var showsPreferences = false
 
     var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            chartColumn
+
+            let editor = viewModel.dayEditor
+            DayDetailPanel(
+                day: editor.day,
+                meetings: viewModel.meetings(for: editor.day),
+                existing: viewModel.intention(for: editor.day),
+                allowsCheckIn: editor.day <= Calendar.current.startOfDay(for: Date()),
+                calendarAccessGranted: viewModel.calendarAccessGranted,
+                initialFocus: editor.kind,
+                // Nothing to dismiss and nothing to confirm: text is written
+                // as it's typed, and the day's button filling in behind the
+                // panel is the confirmation.
+                onSave: { goals, outcomes, reflection in
+                    viewModel.saveDayEntry(
+                        day: editor.day,
+                        goals: goals,
+                        outcomes: outcomes,
+                        reflection: reflection
+                    )
+                }
+            )
+            // Rebuilt when the day changes so its fields reload from that
+            // day's saved text rather than keeping the last day's edits in
+            // @State — and so the outgoing day's pending write is flushed by
+            // its `onDisappear`.
+            .id(editor.day)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            Task {
+                await viewModel.requestCalendarAccessAndRefresh()
+            }
+            viewModel.startAutoRefresh()
+        }
+        .onDisappear {
+            viewModel.stopAutoRefresh()
+        }
+    }
+
+    private var chartColumn: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 // Clear the traffic-light cluster on the hidden title bar.
@@ -34,10 +78,10 @@ struct ContentView: View {
                 }
             }
 
-            // Read once and passed to both parameters: the week is derived
-            // from "now" on each read, so two reads either side of midnight
-            // would label bars with one week's dates and fill them with
-            // another week's hours.
+            // Read once and used for everything the chart shows — bars,
+            // hours and the week's name. The week is derived from "now" on
+            // each read, so separate reads either side of midnight would
+            // dress one week's bars in another week's hours and title.
             let days = viewModel.visibleWeekDays
 
             DailyBarChartView(
@@ -48,11 +92,18 @@ struct ContentView: View {
                 workdayEndHour: viewModel.preferences.workdayEndHour,
                 weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
-                weekLabel: viewModel.visibleWeekLabel,
+                weekLabel: viewModel.weekLabel(for: days),
                 canShowPreviousWeek: viewModel.canShowPreviousWeek,
                 canShowNextWeek: viewModel.canShowNextWeek,
                 onShowPreviousWeek: { viewModel.showPreviousWeek() },
                 onShowNextWeek: { viewModel.showNextWeek() },
+                intention: { day in viewModel.intention(for: day) },
+                selection: viewModel.dayEditor,
+                onSelectDay: { day, kind in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewModel.selectDay(day, kind: kind)
+                    }
+                },
                 onMeetingChange: { day, meetingID, newStart, newEnd in
                     viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
@@ -62,76 +113,6 @@ struct ContentView: View {
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
-
-            Button(dailyPromptTitle) {
-                viewModel.presentDailyPrompt(dailyPromptKind)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.regular)
-            .frame(maxWidth: .infinity)
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .sheet(item: dailyPromptBinding) { kind in
-            switch kind {
-            case .intention:
-                IntentionView(
-                    meetings: viewModel.todayMeetings(),
-                    existing: viewModel.todayIntention(),
-                    onSave: { goals, outcomes in
-                        viewModel.saveIntention(goals: goals, outcomes: outcomes)
-                    },
-                    onCancel: { viewModel.dismissDailyPrompt() }
-                )
-            case .checkIn:
-                CheckInView(
-                    meetings: viewModel.todayMeetings(),
-                    intention: viewModel.todayIntention(),
-                    onSave: { reflection in
-                        viewModel.saveCheckIn(reflection: reflection)
-                    },
-                    onCancel: { viewModel.dismissDailyPrompt() }
-                )
-            }
-        }
-        .onAppear {
-            Task {
-                await viewModel.requestCalendarAccessAndRefresh()
-            }
-            viewModel.startAutoRefresh()
-        }
-        .onDisappear {
-            viewModel.stopAutoRefresh()
-        }
-    }
-
-    /// One control: morning intention until it's set, then end-of-day check-in.
-    private var dailyPromptKind: DailyPromptKind {
-        viewModel.todayIntention()?.hasIntention == true ? .checkIn : .intention
-    }
-
-    private var dailyPromptTitle: String {
-        switch dailyPromptKind {
-        case .intention: return "Set intention"
-        case .checkIn: return "Check in"
-        }
-    }
-
-    /// Bridges `presentedDailyPrompt` to `.sheet(item:)` without Optional wrangling in the call site.
-    private var dailyPromptBinding: Binding<DailyPromptKind?> {
-        Binding(
-            get: { viewModel.presentedDailyPrompt },
-            set: { viewModel.presentedDailyPrompt = $0 }
-        )
-    }
-}
-
-extension DailyPromptKind: Identifiable {
-    var id: String {
-        switch self {
-        case .intention: return "intention"
-        case .checkIn: return "checkIn"
         }
     }
 }
