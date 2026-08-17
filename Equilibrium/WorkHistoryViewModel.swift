@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+/// Which daily-intention sheet the main window should present, if any.
+enum DailyPromptKind: Equatable {
+    case intention
+    case checkIn
+}
+
 @MainActor
 final class WorkHistoryViewModel: ObservableObject {
     @Published var spansByDay: [String: WorkdaySpan] = [:]
@@ -15,8 +21,13 @@ final class WorkHistoryViewModel: ObservableObject {
     /// and (optionally) meeting/focus targets. Set manually or parsed from
     /// free text via `WorkPreferencesGenerator`; see `PreferencesView`.
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
+    /// Per-day morning intentions + evening check-ins.
+    @Published var intentionsByDay: [String: DailyIntention] = [:]
+    /// When set, the main window presents the matching intention / check-in sheet.
+    @Published var presentedDailyPrompt: DailyPromptKind?
 
     private let store = WorkHistoryStore()
+    private let intentionStore = DailyIntentionStore()
     private let liveEventStore = LiveEventStore()
     private let calendar: Calendar = .current
     private var autoRefreshTimer: Timer?
@@ -29,6 +40,10 @@ final class WorkHistoryViewModel: ObservableObject {
     }()
 
     private static let autoRefreshInterval: TimeInterval = 5 * 60
+
+    init() {
+        intentionsByDay = intentionStore.load()
+    }
 
     /// The `WeekHeaderStats` each week's summary was last generated from,
     /// so an unchanged week doesn't re-invoke the model on every refresh.
@@ -72,17 +87,11 @@ final class WorkHistoryViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
 
-            // Live events from IOKit (always available, no FDA required).
+            // Live events captured by IOKit and persisted across launches.
+            // This is the only wake/sleep source: the sandbox rules out
+            // shelling out to `pmset -g log` for historical backfill.
             let liveEvents = self.liveEventStore.load()
-
-            // Historical backfill from pmset (requires Full Disk Access;
-            // returns [] gracefully when FDA is not granted).
-            let pmsetEvents = WakeLogParser.fetchUserPowerEvents()
-
-            // Merge both sources, preferring pmset timestamps when the same
-            // physical event appears in both (they'll be within 60 s).
-            let merged = Self.mergedEvents(live: liveEvents, pmset: pmsetEvents)
-            let freshSpans = WorkdayCalculator.computeSpans(from: merged, calendar: Calendar.current)
+            let freshSpans = WorkdayCalculator.computeSpans(from: liveEvents, calendar: Calendar.current)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -91,6 +100,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
+                DailyIntentionNotifier.reschedule(preferences: self.preferences)
                 self.refreshWeekHeaderSummaries()
             }
 
@@ -216,42 +226,6 @@ final class WorkHistoryViewModel: ObservableObject {
         refresh()
     }
 
-    /// Combines IOKit live events with pmset events, deduplicating events
-    /// of the same kind that fall within 60 seconds of each other.  pmset
-    /// timestamps are preferred when a duplicate is detected.
-    ///
-    /// Deduplication runs in O(n+m): pmset events are bucketed by (kind,
-    /// minute) so that each live event can be checked in O(1).
-    nonisolated static func mergedEvents(live: [PowerEvent], pmset: [PowerEvent]) -> [PowerEvent] {
-        // Build a set of (kind, minute-bucket) keys from pmset events.
-        // Any live event whose minute-bucket matches is considered a duplicate.
-        var pmsetBuckets = Set<String>()
-        for event in pmset {
-            let bucket = minuteBucket(event)
-            // Cover the boundary: also register the adjacent minute so that
-            // events separated by up to 60 s are caught even when they straddle
-            // a minute boundary.
-            pmsetBuckets.insert(bucket)
-            let adjacentDate = event.date.addingTimeInterval(60)
-            pmsetBuckets.insert(minuteBucket(PowerEvent(kind: event.kind, date: adjacentDate)))
-        }
-
-        var result = pmset
-        for liveEvent in live {
-            if !pmsetBuckets.contains(minuteBucket(liveEvent)) {
-                result.append(liveEvent)
-            }
-        }
-        return result.sorted { $0.date < $1.date }
-    }
-
-    /// Returns a string key representing the event's kind and the minute it
-    /// falls in, used for O(1) duplicate detection in `mergedEvents`.
-    private nonisolated static func minuteBucket(_ event: PowerEvent) -> String {
-        let minute = Int(event.date.timeIntervalSinceReferenceDate / 60)
-        return "\(event.kind)-\(minute)"
-    }
-
     private func dayKey(for date: Date) -> String {
         dayKeyFormatter.string(from: date)
     }
@@ -371,6 +345,59 @@ final class WorkHistoryViewModel: ObservableObject {
     func updatePreferences(_ new: WorkPreferences) {
         preferences = new
         WorkPreferencesStore.save(new)
+        DailyIntentionNotifier.reschedule(preferences: new)
+    }
+
+    // MARK: - Daily intention / check-in
+
+    func todayIntention() -> DailyIntention? {
+        intentionsByDay[dayKey(for: Date())]
+    }
+
+    /// Today's calendar meetings with titles, for the intention / check-in lists.
+    func todayMeetings() -> [DayMeeting] {
+        guard calendarAccessGranted else { return [] }
+        return CalendarStore.shared.dayMeetings(on: Date())
+    }
+
+    func saveIntention(goals: String, outcomes: String) {
+        let key = dayKey(for: Date())
+        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+        entry.goals = goals
+        entry.outcomes = outcomes
+        entry.intentionSetAt = Date()
+        intentionsByDay = intentionStore.upsert(entry)
+        presentedDailyPrompt = nil
+    }
+
+    func saveCheckIn(reflection: String) {
+        let key = dayKey(for: Date())
+        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+        entry.checkInReflection = reflection
+        entry.checkedInAt = Date()
+        intentionsByDay = intentionStore.upsert(entry)
+        presentedDailyPrompt = nil
+    }
+
+    /// Opens the intention or check-in sheet (from menu bar / notification tap).
+    func presentDailyPrompt(_ kind: DailyPromptKind) {
+        presentedDailyPrompt = kind
+    }
+
+    func dismissDailyPrompt() {
+        presentedDailyPrompt = nil
+    }
+
+    /// Handles a tap on a daily-intention notification (`userInfo` action).
+    func handleNotificationAction(_ action: String?) {
+        switch action {
+        case "intention":
+            presentedDailyPrompt = .intention
+        case "checkIn":
+            presentedDailyPrompt = .checkIn
+        default:
+            break
+        }
     }
 }
 

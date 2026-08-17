@@ -1,13 +1,28 @@
 import SwiftUI
+import UserNotifications
 
 @main
 struct EquilibriumApp: App {
     @StateObject private var viewModel = WorkHistoryViewModel()
+    /// Retained for the app lifetime so UNUserNotificationCenter's weak
+    /// delegate pointer stays valid.
+    private let notificationRouter: NotificationRouter
+
+    init() {
+        let viewModel = WorkHistoryViewModel()
+        _viewModel = StateObject(wrappedValue: viewModel)
+        notificationRouter = NotificationRouter { action in
+            // Captures the same instance the StateObject will own.
+            viewModel.handleNotificationAction(action)
+        }
+        UNUserNotificationCenter.current().delegate = notificationRouter
+        DailyIntentionNotifier.reschedule(preferences: viewModel.preferences)
+    }
 
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 480, maxHeight: 480)
+                .frame(minWidth: 380, idealWidth: 480, maxWidth: 900, minHeight: 520, maxHeight: 520)
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)
@@ -38,8 +53,28 @@ struct EquilibriumApp: App {
             MenuBarStatusView(viewModel: viewModel)
         } label: {
             MenuBarLabel(viewModel: viewModel)
+                .background(OpenWindowBinder(router: notificationRouter))
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+/// Hooks `openWindow` into `NotificationRouter` from a scene that always
+/// hosts a SwiftUI environment (the menu bar extra).
+private struct OpenWindowBinder: View {
+    let router: NotificationRouter
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onAppear {
+                router.openMainWindow = {
+                    openWindow(id: "main")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
     }
 }
 

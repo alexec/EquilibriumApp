@@ -1,7 +1,8 @@
 import Foundation
 
 /// Persists computed workday spans to disk, keyed by day, so history
-/// accumulates across launches even after macOS rolls off old pmset log data.
+/// accumulates across launches even after `LiveEventStore` prunes the raw
+/// power events those spans were computed from.
 final class WorkHistoryStore {
     private let fileURL: URL
 
@@ -27,7 +28,8 @@ final class WorkHistoryStore {
     /// days are never overwritten. Otherwise, the most recent two days are
     /// always overwritten (still in progress / just finished); older days
     /// are only added if not already present, since old entries won't
-    /// recompute once their source wake data ages out of pmset's log.
+    /// recompute once their source wake events age out of `LiveEventStore`'s
+    /// 30-day retention window.
     func merge(freshSpans: [WorkdaySpan], today: String, yesterday: String) -> [String: WorkdaySpan] {
         var stored = load()
         for span in freshSpans {

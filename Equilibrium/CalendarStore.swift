@@ -66,4 +66,19 @@ final class CalendarStore {
             return start < span.end && end > span.start
         }
     }
+
+    /// Title-preserving meeting list for intention / check-in UI (not merged).
+    func dayMeetings(on date: Date) -> [DayMeeting] {
+        meetingEvents(on: date)
+            .compactMap { event -> DayMeeting? in
+                guard let start = event.startDate, let end = event.endDate, start < end else {
+                    return nil
+                }
+                let title = (event.title?.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled meeting"
+                let id = event.eventIdentifier ?? "\(title)-\(start.timeIntervalSinceReferenceDate)"
+                return DayMeeting(id: id, title: title, start: start, end: end)
+            }
+            .sorted { $0.start < $1.start }
+    }
 }

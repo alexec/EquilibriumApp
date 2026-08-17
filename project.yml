@@ -13,6 +13,7 @@ targets:
           - "AppIcon.icns"
           - "AppIcon.iconset/**"
           - "AppIcon.png"
+          - "Equilibrium.entitlements"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alexcollins.Equilibrium
@@ -20,10 +21,15 @@ targets:
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: YES
+        CODE_SIGN_ENTITLEMENTS: Equilibrium/Equilibrium.entitlements
         CODE_SIGN_STYLE: Automatic
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
-        INFOPLIST_KEY_NSCalendarsUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time."
+        # macOS 14+ matches requestFullAccessToEvents() against the *FullAccess*
+        # key; the plain key is the pre-14 spelling and is kept for macOS 13.
+        INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
+        INFOPLIST_KEY_NSCalendarsUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
         MACOSX_DEPLOYMENT_TARGET: "13.0"
