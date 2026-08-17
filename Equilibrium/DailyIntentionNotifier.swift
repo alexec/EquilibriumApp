@@ -19,7 +19,12 @@ enum DailyIntentionNotifier {
     static let actionKey = "DailyIntentionNotifier.action"
 
     /// Requests alert permission and (re)schedules both daily reminders from
-    /// the configured workday window. Safe to call on every refresh / prefs change.
+    /// the configured workday window.
+    ///
+    /// Called at launch and whenever preferences change — not on every
+    /// refresh. The triggers repeat daily on their own, so re-running this
+    /// every five minutes only churned the pending queue (removing and
+    /// re-adding identical requests) without changing when anything fires.
     static func reschedule(preferences: WorkPreferences) {
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert]) { granted, _ in
@@ -61,13 +66,18 @@ enum DailyIntentionNotifier {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        // Deliberately silent: authorization is requested for `[.alert]` only.
         content.categoryIdentifier = category
         content.userInfo = [actionKey: action]
 
+        // Round to whole minutes *before* splitting into hour/minute.
+        // Rounding the fractional part on its own can yield 60 (a workday
+        // ending at 17.999 gives minute == 60), which is not a valid
+        // `DateComponents` match and would never fire.
+        let totalMinutes = max(0, Int((hour * 60).rounded()))
         var components = DateComponents()
-        components.hour = Int(hour)
-        components.minute = Int((hour.truncatingRemainder(dividingBy: 1) * 60).rounded())
+        components.hour = (totalMinutes / 60) % 24
+        components.minute = totalMinutes % 60
 
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
         let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
