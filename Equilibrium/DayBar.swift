@@ -514,8 +514,13 @@ private struct WorkdayBlockView: View {
     /// press that missed it.
     private func mode(forStartY y: CGFloat, span: WorkdaySpan) -> DragMode? {
         let top = CGFloat(ChartScale.fraction(of: span.start)) * chartHeight
-        let bottom = CGFloat(ChartScale.fraction(of: span.end)) * chartHeight
-        let height = max(bottom - top, barWidth)
+        // The drawn capsule keeps a minimum height however short the day is,
+        // so a quarter-hour is visibly ~18pt of pill sitting below where its
+        // end time falls. Hit-testing against the end time would call the
+        // lower half of that pill a miss — exactly the short days that are
+        // hardest to grab in the first place.
+        let height = max(CGFloat(ChartScale.fraction(of: span.end)) * chartHeight - top, barWidth)
+        let bottom = top + height
         let handle = min(Self.maxHandleHeight, max(Self.minHandleHeight, height / 3))
 
         guard y >= top - Self.grabPadding, y <= bottom + Self.grabPadding else { return nil }
