@@ -389,18 +389,19 @@ final class WorkHistoryViewModel: ObservableObject {
         WeekCalendar.weekDays(offset: weekOffset, calendar: calendar)
     }
 
-    /// How the visible week is named in the chart's navigation: the two
-    /// most recent weeks get a relative name, since that's how you'd refer
-    /// to them; older ones get their date range.
-    var visibleWeekLabel: String {
+    /// How a week is named in the chart's navigation: the two most recent
+    /// weeks get a relative name, since that's how you'd refer to them;
+    /// older ones get their date range.
+    ///
+    /// Takes the week rather than deriving its own, so the name always
+    /// describes the bars actually on screen. Deriving it here would mean a
+    /// second reading of "now", which around midnight can land in a
+    /// different week from the one the chart drew.
+    func weekLabel(for week: [Date]) -> String {
         switch weekOffset {
         case 0: return "This week"
         case -1: return "Last week"
         default:
-            // One computation of the week, not two: each call re-derives the
-            // range from "now", so asking twice could straddle midnight and
-            // label a range whose ends come from different weeks.
-            let week = visibleWeekDays
             guard let first = week.first, let last = week.last else { return "" }
             let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
             let end = sameMonth ? Self.dayOnlyFormatter : Self.monthDayFormatter
@@ -408,7 +409,7 @@ final class WorkHistoryViewModel: ObservableObject {
         }
     }
 
-    // Built once and reused: SwiftUI reads `visibleWeekLabel` on every pass
+    // Built once and reused: SwiftUI reads `weekLabel(for:)` on every pass
     // over the chart's body, and a DateFormatter is expensive enough that
     // constructing two per read is worth avoiding. Confined to the main
     // actor with the rest of the class, so sharing them is safe.

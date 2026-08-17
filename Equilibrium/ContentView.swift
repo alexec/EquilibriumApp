@@ -78,10 +78,10 @@ struct ContentView: View {
                 }
             }
 
-            // Read once and passed to both parameters: the week is derived
-            // from "now" on each read, so two reads either side of midnight
-            // would label bars with one week's dates and fill them with
-            // another week's hours.
+            // Read once and used for everything the chart shows — bars,
+            // hours and the week's name. The week is derived from "now" on
+            // each read, so separate reads either side of midnight would
+            // dress one week's bars in another week's hours and title.
             let days = viewModel.visibleWeekDays
 
             DailyBarChartView(
@@ -92,7 +92,7 @@ struct ContentView: View {
                 workdayEndHour: viewModel.preferences.workdayEndHour,
                 weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
-                weekLabel: viewModel.visibleWeekLabel,
+                weekLabel: viewModel.weekLabel(for: days),
                 canShowPreviousWeek: viewModel.canShowPreviousWeek,
                 canShowNextWeek: viewModel.canShowNextWeek,
                 onShowPreviousWeek: { viewModel.showPreviousWeek() },
