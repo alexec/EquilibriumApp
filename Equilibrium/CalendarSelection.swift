@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists which calendars the user wants Equilibrium to read.
+/// Persists which calendar the user wants Equilibrium to read.
 ///
 /// Deliberately stored separately from `WorkPreferences` rather than as
 /// another field on it: `WorkPreferencesGenerator` builds a *fresh*
@@ -8,29 +8,24 @@ import Foundation
 /// selection living there would be silently wiped every time someone
 /// re-described their week.
 ///
-/// `nil` and "selected everything" are different states on purpose:
-///
-/// - `nil` — the user has never opened the picker. Every calendar is read,
-///   which keeps the chart populated on first run.
-/// - a set — the user has made an explicit choice, and *only* those
-///   calendars are read. An empty set therefore means "read nothing",
-///   not "read everything"; without that distinction, deselecting your
-///   last calendar would silently re-enable all of them.
+/// A single calendar, not a set: work lives on one calendar for almost
+/// everyone, and picking one is a clearer question to answer than ticking
+/// through a list. `nil` means the user hasn't chosen yet, in which case
+/// every calendar is read so the chart still populates on first run.
 enum CalendarSelectionStore {
-    private static let key = "CalendarSelection.identifiers"
+    private static let key = "CalendarSelection.identifier"
 
-    /// Returns the chosen calendar identifiers, or `nil` if the user has
-    /// never narrowed the selection.
-    static func load(defaults: UserDefaults = .standard) -> Set<String>? {
-        guard let stored = defaults.array(forKey: key) as? [String] else { return nil }
-        return Set(stored)
+    /// The chosen calendar identifier, or `nil` if the user has never
+    /// picked one.
+    static func load(defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: key)
     }
 
-    static func save(_ identifiers: Set<String>, defaults: UserDefaults = .standard) {
-        defaults.set(Array(identifiers), forKey: key)
+    static func save(_ identifier: String, defaults: UserDefaults = .standard) {
+        defaults.set(identifier, forKey: key)
     }
 
-    /// Drops the explicit selection, reverting to "read every calendar".
+    /// Drops the explicit choice, reverting to "read every calendar".
     static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: key)
     }
@@ -43,8 +38,8 @@ struct SelectableCalendar: Identifiable, Hashable {
     /// The `EKCalendar.calendarIdentifier`.
     let id: String
     let title: String
-    /// The owning account, e.g. "iCloud", "Google", "Exchange" — shown as a
-    /// section header so two calendars both called "Calendar" are
+    /// The owning account, e.g. "iCloud", "Google", "Exchange" — shown
+    /// alongside the name so two calendars both called "Calendar" are
     /// distinguishable.
     let sourceTitle: String
     /// The calendar's colour, for the swatch beside its name.

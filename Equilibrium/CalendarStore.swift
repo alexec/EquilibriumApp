@@ -8,13 +8,13 @@ final class CalendarStore {
 
     private let store = EKEventStore()
 
-    /// Identifiers of the calendars to read, or `nil` to read all of them.
+    /// Identifier of the calendar to read, or `nil` to read all of them.
     /// Seeded from `CalendarSelectionStore` and updated when the user edits
     /// the picker in preferences.
-    private var selectedIdentifiers: Set<String>?
+    private var selectedIdentifier: String?
 
     private init() {
-        selectedIdentifiers = CalendarSelectionStore.load()
+        selectedIdentifier = CalendarSelectionStore.load()
     }
 
     // MARK: - Calendar selection
@@ -38,30 +38,31 @@ final class CalendarStore {
             }
     }
 
-    /// The current selection, or `nil` if the user has never narrowed it.
-    var selection: Set<String>? { selectedIdentifiers }
+    /// The chosen calendar, or `nil` if the user has never picked one.
+    var selection: String? { selectedIdentifier }
 
-    /// Records an explicit calendar selection. Pass `nil` to revert to
-    /// reading every calendar.
-    func updateSelection(_ identifiers: Set<String>?) {
-        selectedIdentifiers = identifiers
-        if let identifiers {
-            CalendarSelectionStore.save(identifiers)
+    /// Records an explicit calendar choice. Pass `nil` to revert to reading
+    /// every calendar.
+    func updateSelection(_ identifier: String?) {
+        selectedIdentifier = identifier
+        if let identifier {
+            CalendarSelectionStore.save(identifier)
         } else {
             CalendarSelectionStore.clear()
         }
     }
 
-    /// Resolves `selectedIdentifiers` to live `EKCalendar` objects for use as
-    /// a query predicate's scope.
+    /// Resolves `selectedIdentifier` to a live `EKCalendar` for use as a
+    /// query predicate's scope.
     ///
     /// Returns `nil` — meaning "every calendar" to EventKit — only when the
-    /// user has made no explicit choice. Identifiers that no longer resolve
-    /// (a calendar deleted or unsubscribed since it was picked) are dropped,
-    /// so a stale entry narrows the query rather than breaking it.
+    /// user has made no explicit choice. A chosen calendar that no longer
+    /// resolves (deleted or unsubscribed since it was picked) yields an
+    /// empty scope, so the app reads nothing rather than silently falling
+    /// back to reading everything; `CalendarPickerView` surfaces that state.
     private func scopedCalendars() -> [EKCalendar]? {
-        guard let selectedIdentifiers else { return nil }
-        return selectedIdentifiers.compactMap { store.calendar(withIdentifier: $0) }
+        guard let selectedIdentifier else { return nil }
+        return [store.calendar(withIdentifier: selectedIdentifier)].compactMap { $0 }
     }
 
     // MARK: - Permission

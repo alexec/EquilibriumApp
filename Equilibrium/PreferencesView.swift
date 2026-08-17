@@ -15,9 +15,9 @@ struct PreferencesView: View {
     let onSave: (WorkPreferences) -> Void
     /// Calendars offered by the picker; empty when access hasn't been granted.
     let calendars: [SelectableCalendar]
-    /// Current calendar selection, `nil` when every calendar is read.
-    let calendarSelection: Set<String>?
-    let onCalendarSelectionChange: (Set<String>?) -> Void
+    /// Chosen calendar, `nil` when every calendar is read.
+    let calendarSelection: String?
+    let onCalendarSelectionChange: (String?) -> Void
 
     @State private var freeText: String
     @State private var draft: WorkPreferences
@@ -30,8 +30,8 @@ struct PreferencesView: View {
     init(
         current: WorkPreferences,
         calendars: [SelectableCalendar],
-        calendarSelection: Set<String>?,
-        onCalendarSelectionChange: @escaping (Set<String>?) -> Void,
+        calendarSelection: String?,
+        onCalendarSelectionChange: @escaping (String?) -> Void,
         onSave: @escaping (WorkPreferences) -> Void
     ) {
         self.current = current

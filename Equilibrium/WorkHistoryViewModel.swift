@@ -28,8 +28,8 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Calendars offered by the preferences picker. Empty until calendar
     /// access is granted, since EventKit vends nothing before then.
     @Published var availableCalendars: [SelectableCalendar] = []
-    /// Which calendars are read, or `nil` while the user hasn't narrowed it.
-    @Published var calendarSelection: Set<String>?
+    /// Which calendar is read, or `nil` while the user hasn't picked one.
+    @Published var calendarSelection: String?
 
     private let store = WorkHistoryStore()
     private let intentionStore = DailyIntentionStore()
@@ -71,12 +71,12 @@ final class WorkHistoryViewModel: ObservableObject {
         refresh()
     }
 
-    /// Records a new calendar selection and re-reads meeting data so days
-    /// annotated from a now-deselected calendar drop their meetings
+    /// Records a new calendar choice and re-reads meeting data so days
+    /// annotated from a no-longer-selected calendar drop their meetings
     /// immediately, rather than lingering until the next auto-refresh.
-    func updateCalendarSelection(_ identifiers: Set<String>?) {
-        CalendarStore.shared.updateSelection(identifiers)
-        calendarSelection = identifiers
+    func updateCalendarSelection(_ identifier: String?) {
+        CalendarStore.shared.updateSelection(identifier)
+        calendarSelection = identifier
         guard calendarAccessGranted else { return }
         Task { await refreshMeetingData() }
     }

@@ -1,73 +1,61 @@
 import SwiftUI
 
-/// Lets the user choose which calendars Equilibrium reads, grouped by the
-/// account each belongs to.
+/// Lets the user pick the one calendar Equilibrium reads.
 ///
 /// The point is privacy: someone with work and personal calendars on the
-/// same Mac can keep the personal ones out of the app entirely. Deselecting
-/// a calendar isn't cosmetic — it drops out of the EventKit query, so its
-/// events are never read at all.
+/// same Mac can point the app at work and leave the rest untouched. The
+/// choice isn't cosmetic — every other calendar drops out of the EventKit
+/// query, so their events are never read at all.
+///
+/// A single choice rather than a set of checkboxes: work lives on one
+/// calendar for almost everyone. "All calendars" stays available as the
+/// unset default, so the chart still populates before anyone visits
+/// preferences.
 struct CalendarPickerView: View {
     /// All selectable calendars, already sorted by account then title.
     let calendars: [SelectableCalendar]
-    /// Currently selected identifiers, or `nil` when the user hasn't
-    /// narrowed the selection and every calendar is being read.
-    let selection: Set<String>?
-    let onChange: (Set<String>?) -> Void
+    /// The chosen calendar, or `nil` when every calendar is being read.
+    let selection: String?
+    let onChange: (String?) -> Void
 
-    /// `nil` selection means "all" — resolve it for display so every row
-    /// starts checked.
-    private var effectiveSelection: Set<String> {
-        selection ?? Set(calendars.map(\.id))
-    }
+    /// Sentinel for the "All calendars" row, which represents a `nil`
+    /// selection. `Picker` needs every tag to be the same type, so the
+    /// absence of a choice has to be spelled as a value.
+    private static let allTag = ""
 
-    private var groups: [(source: String, calendars: [SelectableCalendar])] {
-        var order: [String] = []
-        var bySource: [String: [SelectableCalendar]] = [:]
-        for calendar in calendars {
-            if bySource[calendar.sourceTitle] == nil { order.append(calendar.sourceTitle) }
-            bySource[calendar.sourceTitle, default: []].append(calendar)
-        }
-        return order.map { ($0, bySource[$0] ?? []) }
+    /// True when a calendar was picked but no longer exists — deleted or
+    /// unsubscribed since. Worth calling out, because the app reads nothing
+    /// in that state rather than quietly reverting to reading everything.
+    private var selectionIsMissing: Bool {
+        guard let selection else { return false }
+        return !calendars.contains { $0.id == selection }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Text("Calendars to read")
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-                if selection != nil {
-                    Button("All") { onChange(nil) }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 10))
-                        .foregroundColor(.accentColor)
-                }
-            }
+            Text("Calendar to read")
+                .font(.system(size: 12, weight: .medium))
 
             if calendars.isEmpty {
                 Text("No calendars available.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(groups, id: \.source) { group in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(group.source)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(.secondary)
-                                ForEach(group.calendars) { calendar in
-                                    row(for: calendar)
-                                }
-                            }
-                        }
+                Picker("", selection: Binding(
+                    get: { selection ?? Self.allTag },
+                    set: { onChange($0 == Self.allTag ? nil : $0) }
+                )) {
+                    Text("All calendars").tag(Self.allTag)
+                    ForEach(calendars) { calendar in
+                        row(for: calendar).tag(calendar.id)
                     }
                 }
-                .frame(maxHeight: 160)
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .controlSize(.small)
 
-                if effectiveSelection.isEmpty {
-                    Text("No calendars selected — meeting time won't be tracked.")
+                if selectionIsMissing {
+                    Text("That calendar is no longer available — nothing is being read.")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -76,29 +64,16 @@ struct CalendarPickerView: View {
         }
     }
 
+    /// Account name is included inline rather than as a section header:
+    /// menu-style pickers show only the selected row when closed, so the
+    /// account has to travel with the title to stay useful there.
     private func row(for calendar: SelectableCalendar) -> some View {
-        Toggle(isOn: Binding(
-            get: { effectiveSelection.contains(calendar.id) },
-            set: { isOn in
-                var updated = effectiveSelection
-                if isOn { updated.insert(calendar.id) } else { updated.remove(calendar.id) }
-                // Always hand back an explicit set, even when everything is
-                // ticked: that records "the user checked this and was happy",
-                // so a calendar added later isn't silently pulled in.
-                onChange(updated)
-            }
-        )) {
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(color(for: calendar))
-                    .frame(width: 7, height: 7)
-                Text(calendar.title)
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color(for: calendar))
+                .frame(width: 7, height: 7)
+            Text("\(calendar.title) — \(calendar.sourceTitle)")
         }
-        .toggleStyle(.checkbox)
     }
 
     private func color(for calendar: SelectableCalendar) -> Color {
