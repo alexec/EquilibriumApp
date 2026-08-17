@@ -48,9 +48,10 @@ struct DailyBarChartView: View {
     private static let weekHeaderHeight: CGFloat = 46
     private static let yAxisWidth: CGFloat = 36
     private static let yAxisHours: [Double] = [6, 9, 12, 15, 18, 21]
-    // Seven columns rather than fourteen: at the 380pt minimum window width
-    // a column is ~34pt, so an 18pt bar plus its 10pt workday track still
-    // clears its neighbours.
+    // Seven columns rather than fourteen: even at the narrowest the window
+    // is allowed to get (see `EquilibriumApp`'s frame), a column has room
+    // for this bar plus its 10pt workday track and still clears its
+    // neighbours.
     private static let barWidth: CGFloat = 18
     private static let columnSpacing: CGFloat = 4
 
@@ -136,15 +137,13 @@ struct DailyBarChartView: View {
     private var weekAverageHeader: some View {
         VStack(spacing: 2) {
             HStack(spacing: 8) {
-                weekStepButton("chevron.left", enabled: canShowPreviousWeek) { page(.previous) }
+                weekStepButton("chevron.left", label: "Previous week", enabled: canShowPreviousWeek) { page(.previous) }
                     .keyboardShortcut("[", modifiers: .command)
-                    .help("Previous week (⌘[)")
                 Text(weekLabel)
                     .font(.system(size: 12, weight: .semibold))
                     .frame(minWidth: 96)
-                weekStepButton("chevron.right", enabled: canShowNextWeek) { page(.next) }
+                weekStepButton("chevron.right", label: "Next week", enabled: canShowNextWeek) { page(.next) }
                     .keyboardShortcut("]", modifiers: .command)
-                    .help("Next week (⌘])")
             }
 
             if let weekHeaderLine {
@@ -164,7 +163,15 @@ struct DailyBarChartView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func weekStepButton(_ systemName: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    /// `label` names the button for VoiceOver as well as the tooltip: the
+    /// chevrons carry no text of their own, so without it they're announced
+    /// only as unlabelled buttons.
+    private func weekStepButton(
+        _ systemName: String,
+        label: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .semibold))
@@ -176,6 +183,8 @@ struct DailyBarChartView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel(label)
+        .help(label)
     }
 
     private func dayColumns(chartHeight: CGFloat) -> some View {

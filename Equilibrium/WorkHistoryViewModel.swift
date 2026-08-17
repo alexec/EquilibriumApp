@@ -373,14 +373,27 @@ final class WorkHistoryViewModel: ObservableObject {
         case -1: return "Last week"
         default:
             guard let first = visibleWeekDays.first, let last = visibleWeekDays.last else { return "" }
-            let month = DateFormatter()
-            month.dateFormat = "MMM d"
-            let dayOnly = DateFormatter()
-            dayOnly.dateFormat = "d"
             let sameMonth = calendar.isDate(first, equalTo: last, toGranularity: .month)
-            return "\(month.string(from: first)) – \(sameMonth ? dayOnly.string(from: last) : month.string(from: last))"
+            let end = sameMonth ? Self.dayOnlyFormatter : Self.monthDayFormatter
+            return "\(Self.monthDayFormatter.string(from: first)) – \(end.string(from: last))"
         }
     }
+
+    // Built once and reused: SwiftUI reads `visibleWeekLabel` on every pass
+    // over the chart's body, and a DateFormatter is expensive enough that
+    // constructing two per read is worth avoiding. Confined to the main
+    // actor with the rest of the class, so sharing them is safe.
+    private static let monthDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
+
+    private static let dayOnlyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter
+    }()
 
     /// Paging back stops at the week holding the oldest day on record —
     /// there's nothing before it but empty charts.
