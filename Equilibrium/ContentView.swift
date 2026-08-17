@@ -34,6 +34,12 @@ struct ContentView: View {
                 }
             }
 
+            // Read once and passed to both parameters: the week is derived
+            // from "now" on each read, so two reads either side of midnight
+            // would label bars with one week's dates and fill them with
+            // another week's hours.
+            let days = viewModel.visibleWeekDays
+
             DailyBarChartView(
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
@@ -98,10 +104,6 @@ struct ContentView: View {
         .onDisappear {
             viewModel.stopAutoRefresh()
         }
-    }
-
-    private var days: [Date] {
-        viewModel.visibleWeekDays
     }
 
     /// One control: morning intention until it's set, then end-of-day check-in.
