@@ -37,7 +37,10 @@ struct WorkPreferences: Codable, Equatable {
         return parts.joined(separator: ", ") + "."
     }
 
-    private static func clockLabel(_ hour: Double) -> String {
+    /// "9am", "5pm", "12am" — also used to label the hour pickers in
+    /// `WorkPreferencesForm`, so the manual editor and this sentence agree
+    /// on how a time is written.
+    static func clockLabel(_ hour: Double) -> String {
         let period = hour < 12 || hour == 24 ? "am" : "pm"
         let displayHour = hour == 0 || hour == 24 ? 12 : (hour > 12 ? hour - 12 : hour)
         return "\(Int(displayHour))\(period)"

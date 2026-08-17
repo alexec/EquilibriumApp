@@ -84,15 +84,10 @@ enum WeeklyInsightGenerator {
         }
     }
 
-    /// Whether an on-device model is ready to use right now.
-    static var isAvailable: Bool {
-        #if canImport(FoundationModels)
-        guard #available(macOS 26.0, *) else { return false }
-        return SystemLanguageModel.default.availability == .available
-        #else
-        return false
-        #endif
-    }
+    /// Whether an on-device model is ready to use right now. False on most
+    /// Macs — see `OnDeviceModel` — which is why every caller has a
+    /// deterministic fallback rather than an error path.
+    static var isAvailable: Bool { OnDeviceModel.isAvailable }
 
     #if canImport(FoundationModels)
     /// Produces one short "You worked ..." sentence summarizing a week's
