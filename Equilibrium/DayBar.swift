@@ -31,10 +31,12 @@ private struct WindowDragBlocker: NSViewRepresentable {
 /// the auto-detected break — the one thing here without a precise time) is
 /// drag-editable the same three ways as a meeting: top edge = start,
 /// bottom edge = end, middle = move. Meetings (real calendar times) are
-/// drawn as separate yellow blocks on top, positioned at their actual
-/// times, each independently drag-editable the same way — see
-/// `MeetingBlockView`. There's no "focus" segment: it was always a derived
-/// guess (effective hours minus meetings), never a directly known quantity.
+/// drawn as separate meeting blocks on top (yellow normally; a lighter
+/// red on fiery days so they stay compatible with the work capsule),
+/// positioned at their actual times, each independently drag-editable —
+/// see `MeetingBlockView`. There's no "focus" segment: it was always a
+/// derived guess (effective hours minus meetings), never a directly known
+/// quantity.
 struct DayBar: View {
     let span: WorkdaySpan?
     /// The calendar day this bar represents — needed to construct a
@@ -165,6 +167,7 @@ struct DayBar: View {
             // week days get a 0h span that only holds calendar blocks).
             if let span, !span.meetings.isEmpty {
                 let (clampStart, clampEnd) = meetingClampBounds(for: span, day: day)
+                let fireIntensity = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
                 ForEach(span.meetings) { meeting in
                     MeetingBlockView(
                         meeting: meeting,
@@ -172,6 +175,7 @@ struct DayBar: View {
                         barWidth: barWidth,
                         dayStart: clampStart,
                         dayEnd: clampEnd,
+                        color: DayFire.meetingColor(intensity: fireIntensity),
                         onChange: { newStart, newEnd in
                             onMeetingChange(meeting.id, newStart, newEnd)
                         }
@@ -220,6 +224,7 @@ private struct MeetingBlockView: View {
     let barWidth: CGFloat
     let dayStart: Date
     let dayEnd: Date
+    let color: Color
     let onChange: (Date, Date) -> Void
 
     private enum DragMode {
@@ -262,7 +267,7 @@ private struct MeetingBlockView: View {
 
         ZStack(alignment: .top) {
             Capsule()
-                .fill(Color.yellow)
+                .fill(color)
                 .frame(width: barWidth, height: height)
 
             if isResizeOnly {
@@ -365,6 +370,15 @@ private enum DayFire {
     static func breakColor(intensity: Double) -> Color {
         guard intensity > 0 else { return Color.gray.opacity(0.35) }
         return workColor(intensity: intensity).opacity(0.40)
+    }
+
+    /// Meeting overlay: yellow on calm days; a brighter coral-red on fiery
+    /// days so blocks stay distinct from the work capsule without clashing.
+    static func meetingColor(intensity: Double) -> Color {
+        guard intensity > 0 else { return .yellow }
+        let green = 0.52 - intensity * 0.22
+        let blue = 0.30 - intensity * 0.12
+        return Color(red: 1.0, green: green, blue: blue)
     }
 }
 

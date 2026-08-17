@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 
+/// Which daily-intention sheet the main window should present, if any.
+enum DailyPromptKind: Equatable {
+    case intention
+    case checkIn
+}
+
 @MainActor
 final class WorkHistoryViewModel: ObservableObject {
     @Published var spansByDay: [String: WorkdaySpan] = [:]
@@ -15,8 +21,18 @@ final class WorkHistoryViewModel: ObservableObject {
     /// and (optionally) meeting/focus targets. Set manually or parsed from
     /// free text via `WorkPreferencesGenerator`; see `PreferencesView`.
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
+    /// Per-day morning intentions + evening check-ins.
+    @Published var intentionsByDay: [String: DailyIntention] = [:]
+    /// When set, the main window presents the matching intention / check-in sheet.
+    @Published var presentedDailyPrompt: DailyPromptKind?
+    /// Calendars offered by the preferences picker. Empty until calendar
+    /// access is granted, since EventKit vends nothing before then.
+    @Published var availableCalendars: [SelectableCalendar] = []
+    /// Which calendar is read, or `nil` while the user hasn't picked one.
+    @Published var calendarSelection: String?
 
     private let store = WorkHistoryStore()
+    private let intentionStore = DailyIntentionStore()
     private let liveEventStore = LiveEventStore()
     private let calendar: Calendar = .current
     private var autoRefreshTimer: Timer?
@@ -29,6 +45,11 @@ final class WorkHistoryViewModel: ObservableObject {
     }()
 
     private static let autoRefreshInterval: TimeInterval = 5 * 60
+
+    init() {
+        intentionsByDay = intentionStore.load()
+        calendarSelection = CalendarStore.shared.selection
+    }
 
     /// The `WeekHeaderStats` each week's summary was last generated from,
     /// so an unchanged week doesn't re-invoke the model on every refresh.
@@ -44,7 +65,20 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Requests calendar access and kicks off the first data refresh.
     func requestCalendarAccessAndRefresh() async {
         calendarAccessGranted = await CalendarStore.shared.requestAccess()
+        if calendarAccessGranted {
+            availableCalendars = CalendarStore.shared.availableCalendars()
+        }
         refresh()
+    }
+
+    /// Records a new calendar choice and re-reads meeting data so days
+    /// annotated from a no-longer-selected calendar drop their meetings
+    /// immediately, rather than lingering until the next auto-refresh.
+    func updateCalendarSelection(_ identifier: String?) {
+        CalendarStore.shared.updateSelection(identifier)
+        calendarSelection = identifier
+        guard calendarAccessGranted else { return }
+        Task { await refreshMeetingData() }
     }
 
     /// Starts IOKit power-notification monitoring and the periodic refresh
@@ -72,17 +106,11 @@ final class WorkHistoryViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
 
-            // Live events from IOKit (always available, no FDA required).
+            // Live events captured by IOKit and persisted across launches.
+            // This is the only wake/sleep source: the sandbox rules out
+            // shelling out to `pmset -g log` for historical backfill.
             let liveEvents = self.liveEventStore.load()
-
-            // Historical backfill from pmset (requires Full Disk Access;
-            // returns [] gracefully when FDA is not granted).
-            let pmsetEvents = WakeLogParser.fetchUserPowerEvents()
-
-            // Merge both sources, preferring pmset timestamps when the same
-            // physical event appears in both (they'll be within 60 s).
-            let merged = Self.mergedEvents(live: liveEvents, pmset: pmsetEvents)
-            let freshSpans = WorkdayCalculator.computeSpans(from: merged, calendar: Calendar.current)
+            let freshSpans = WorkdayCalculator.computeSpans(from: liveEvents, calendar: Calendar.current)
 
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -91,6 +119,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
+                DailyIntentionNotifier.reschedule(preferences: self.preferences)
                 self.refreshWeekHeaderSummaries()
             }
 
@@ -141,24 +170,53 @@ final class WorkHistoryViewModel: ObservableObject {
         weekHeaderSummaries[dayKey(for: day)]
     }
 
-    /// Re-reads calendar events for worked days (clipped to each span) and
-    /// for remaining days in the current week (full-day, so future days
-    /// without a work capsule still show meetings). Days with hand-dragged
-    /// meetings (`meetingsManuallyEdited`) are left alone — see
-    /// `updateMeeting`.
+    /// Re-reads calendar events for every stored day (clipped to the workday
+    /// span when there is one, full-day otherwise) and for remaining days in
+    /// the current week, so future days without a work capsule still show
+    /// meetings. Days with hand-dragged meetings (`meetingsManuallyEdited`)
+    /// are left alone — see `updateMeeting`.
+    ///
+    /// Zero-hour days are re-read too, not just worked ones. They can hold
+    /// meetings (a day full of calls but no tracked activity), and if they
+    /// were skipped their meetings would be frozen forever — most visibly
+    /// after deselecting a calendar in preferences, where its events would
+    /// linger on exactly those days.
     @MainActor
     func refreshMeetingData() async {
         var updated = spansByDay
         let today = calendar.startOfDay(for: Date())
 
-        // Worked days: clip meetings to the actual workday span.
         for (key, span) in spansByDay {
-            guard span.hours > 0 else { continue }
             guard !span.meetingsManuallyEdited else { continue }
             guard let date = dayKeyFormatter.date(from: key) else { continue }
-            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+
+            // Clip to the workday only when one was actually tracked;
+            // a zero-hour day would clip every meeting away to nothing.
+            let hasWorkday = span.hours > 0
+            let events = hasWorkday
+                ? CalendarStore.shared.meetingEvents(on: date, span: span)
+                : CalendarStore.shared.meetingEvents(on: date)
+            let meetings = hasWorkday
+                ? MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+                : MeetingCalculator.mergedBlocks(from: events)
+
+            // A zero-hour day whose meetings have all gone carries nothing
+            // worth keeping, so drop the row rather than leaving an empty
+            // placeholder bar. Manual overrides are the exception: the user
+            // put that day there deliberately.
+            //
+            // Only today onward, matching the current-week pass below.
+            // Nothing ever re-scans a past date that isn't already stored,
+            // so dropping one would be permanent — re-selecting a calendar
+            // in preferences could never bring that day back. Past days keep
+            // their (now empty) row instead, which renders the same as no row.
+            if meetings.isEmpty, !hasWorkday, !span.isManual, date >= today {
+                updated.removeValue(forKey: key)
+                continue
+            }
+
             var annotated = span
-            annotated.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            annotated.meetings = meetings
             annotated.hasCalendarData = true
             updated[key] = annotated
         }
@@ -214,42 +272,6 @@ final class WorkHistoryViewModel: ObservableObject {
     private func handleLiveEvent(_ event: PowerEvent) {
         liveEventStore.append([event])
         refresh()
-    }
-
-    /// Combines IOKit live events with pmset events, deduplicating events
-    /// of the same kind that fall within 60 seconds of each other.  pmset
-    /// timestamps are preferred when a duplicate is detected.
-    ///
-    /// Deduplication runs in O(n+m): pmset events are bucketed by (kind,
-    /// minute) so that each live event can be checked in O(1).
-    nonisolated static func mergedEvents(live: [PowerEvent], pmset: [PowerEvent]) -> [PowerEvent] {
-        // Build a set of (kind, minute-bucket) keys from pmset events.
-        // Any live event whose minute-bucket matches is considered a duplicate.
-        var pmsetBuckets = Set<String>()
-        for event in pmset {
-            let bucket = minuteBucket(event)
-            // Cover the boundary: also register the adjacent minute so that
-            // events separated by up to 60 s are caught even when they straddle
-            // a minute boundary.
-            pmsetBuckets.insert(bucket)
-            let adjacentDate = event.date.addingTimeInterval(60)
-            pmsetBuckets.insert(minuteBucket(PowerEvent(kind: event.kind, date: adjacentDate)))
-        }
-
-        var result = pmset
-        for liveEvent in live {
-            if !pmsetBuckets.contains(minuteBucket(liveEvent)) {
-                result.append(liveEvent)
-            }
-        }
-        return result.sorted { $0.date < $1.date }
-    }
-
-    /// Returns a string key representing the event's kind and the minute it
-    /// falls in, used for O(1) duplicate detection in `mergedEvents`.
-    private nonisolated static func minuteBucket(_ event: PowerEvent) -> String {
-        let minute = Int(event.date.timeIntervalSinceReferenceDate / 60)
-        return "\(event.kind)-\(minute)"
     }
 
     private func dayKey(for date: Date) -> String {
@@ -371,6 +393,59 @@ final class WorkHistoryViewModel: ObservableObject {
     func updatePreferences(_ new: WorkPreferences) {
         preferences = new
         WorkPreferencesStore.save(new)
+        DailyIntentionNotifier.reschedule(preferences: new)
+    }
+
+    // MARK: - Daily intention / check-in
+
+    func todayIntention() -> DailyIntention? {
+        intentionsByDay[dayKey(for: Date())]
+    }
+
+    /// Today's calendar meetings with titles, for the intention / check-in lists.
+    func todayMeetings() -> [DayMeeting] {
+        guard calendarAccessGranted else { return [] }
+        return CalendarStore.shared.dayMeetings(on: Date())
+    }
+
+    func saveIntention(goals: String, outcomes: String) {
+        let key = dayKey(for: Date())
+        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+        entry.goals = goals
+        entry.outcomes = outcomes
+        entry.intentionSetAt = Date()
+        intentionsByDay = intentionStore.upsert(entry)
+        presentedDailyPrompt = nil
+    }
+
+    func saveCheckIn(reflection: String) {
+        let key = dayKey(for: Date())
+        var entry = intentionsByDay[key] ?? DailyIntention(dayKey: key)
+        entry.checkInReflection = reflection
+        entry.checkedInAt = Date()
+        intentionsByDay = intentionStore.upsert(entry)
+        presentedDailyPrompt = nil
+    }
+
+    /// Opens the intention or check-in sheet (from menu bar / notification tap).
+    func presentDailyPrompt(_ kind: DailyPromptKind) {
+        presentedDailyPrompt = kind
+    }
+
+    func dismissDailyPrompt() {
+        presentedDailyPrompt = nil
+    }
+
+    /// Handles a tap on a daily-intention notification (`userInfo` action).
+    func handleNotificationAction(_ action: String?) {
+        switch action {
+        case "intention":
+            presentedDailyPrompt = .intention
+        case "checkIn":
+            presentedDailyPrompt = .checkIn
+        default:
+            break
+        }
     }
 }
 

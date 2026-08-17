@@ -59,7 +59,8 @@ struct WorkdaySpan: Codable, Identifiable {
     var meetingsManuallyEdited: Bool = false
 
     /// Break minutes automatically detected from intra-day sleep/wake gaps
-    /// in the pmset log (gaps >= 20 min but < the 8 h new-day threshold).
+    /// in the recorded power events (gaps >= 20 min but < the 8 h new-day
+    /// threshold).
     /// Used for `effectiveHours` when no manual `breakMinutes` override is set.
     var intraBreakMinutes: Int = 0
 

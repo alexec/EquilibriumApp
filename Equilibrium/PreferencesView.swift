@@ -13,6 +13,11 @@ import SwiftUI
 struct PreferencesView: View {
     let current: WorkPreferences
     let onSave: (WorkPreferences) -> Void
+    /// Calendars offered by the picker; empty when access hasn't been granted.
+    let calendars: [SelectableCalendar]
+    /// Chosen calendar, `nil` when every calendar is read.
+    let calendarSelection: String?
+    let onCalendarSelectionChange: (String?) -> Void
 
     @State private var freeText: String
     @State private var draft: WorkPreferences
@@ -22,9 +27,18 @@ struct PreferencesView: View {
 
     private static let examplePrompt = "I'd like to work a balanced 9-5 week with 3h of meetings a day, and 5h of focus time."
 
-    init(current: WorkPreferences, onSave: @escaping (WorkPreferences) -> Void) {
+    init(
+        current: WorkPreferences,
+        calendars: [SelectableCalendar],
+        calendarSelection: String?,
+        onCalendarSelectionChange: @escaping (String?) -> Void,
+        onSave: @escaping (WorkPreferences) -> Void
+    ) {
         self.current = current
         self.onSave = onSave
+        self.calendars = calendars
+        self.calendarSelection = calendarSelection
+        self.onCalendarSelectionChange = onCalendarSelectionChange
         _draft = State(initialValue: current)
         _freeText = State(initialValue: Self.examplePrompt)
         // Only show a result up front if there's already a real, previously
@@ -44,6 +58,14 @@ struct PreferencesView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
+
+            Divider()
+
+            CalendarPickerView(
+                calendars: calendars,
+                selection: calendarSelection,
+                onChange: onCalendarSelectionChange
+            )
 
             if hasResult {
                 Divider()

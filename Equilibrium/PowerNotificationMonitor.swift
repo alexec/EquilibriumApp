@@ -2,7 +2,8 @@ import Foundation
 import IOKit.pwr_mgt
 
 /// Registers for IOKit system-power notifications and emits live
-/// wake/sleep `PowerEvent` values without requiring Full Disk Access.
+/// wake/sleep `PowerEvent` values. Works inside the App Sandbox and
+/// requires no entitlement or user-granted permission.
 ///
 /// The registration is made against the root power domain via
 /// `IORegisterForSystemPower`, which delivers callbacks on a dedicated

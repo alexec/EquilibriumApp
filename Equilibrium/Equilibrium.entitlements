@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Confines the app to its own container. Everything Equilibrium needs
+	     lives inside that container plus the calendar entitlement below:
+	     there is no networking (the weekly caption comes from the on-device
+	     FoundationModels LLM), no access to user files, and no subprocesses. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Read-only EventKit access. EventKit offers no narrower read tier;
+	     the alternative (write-only) cannot read events at all. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>
