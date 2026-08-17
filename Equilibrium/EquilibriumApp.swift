@@ -3,7 +3,9 @@ import UserNotifications
 
 @main
 struct EquilibriumApp: App {
-    @StateObject private var viewModel = WorkHistoryViewModel()
+    // No default value: `init()` below builds the one instance and installs
+    // it via `_viewModel`, so a default here would be dead weight.
+    @StateObject private var viewModel: WorkHistoryViewModel
     /// Retained for the app lifetime so UNUserNotificationCenter's weak
     /// delegate pointer stays valid.
     private let notificationRouter: NotificationRouter

@@ -21,8 +21,11 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Show banners even while Equilibrium is frontmost.
-        completionHandler([.banner, .sound])
+        // Show banners even while Equilibrium is frontmost. No `.sound`:
+        // authorization is requested for `[.alert]` only, so asking to play
+        // one here would only ever fire for someone who granted sound to an
+        // earlier build.
+        completionHandler([.banner])
     }
 
     func userNotificationCenter(

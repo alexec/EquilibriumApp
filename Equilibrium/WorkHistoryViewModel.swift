@@ -119,7 +119,6 @@ final class WorkHistoryViewModel: ObservableObject {
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
-                DailyIntentionNotifier.reschedule(preferences: self.preferences)
                 self.refreshWeekHeaderSummaries()
             }
 
