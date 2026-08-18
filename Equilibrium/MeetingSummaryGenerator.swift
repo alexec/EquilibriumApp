@@ -41,9 +41,13 @@ enum MeetingSummaryGenerator {
             Work only from the words in the titles. Never merge two titles \
             into one activity, never name a person, never say who did \
             anything, and never add a detail that isn't written there. Group \
-            similar titles ("three interviews") rather than listing them all. \
-            Don't state the count or the total hours: those are already \
-            shown.
+            similar titles under one word rather than listing them all — \
+            "interviews", not each interview by name.
+
+            Never write a number, in digits or in words. The count and the \
+            hours are shown already, and a second count that disagrees with \
+            them is worse than none: two entries for one interview are two \
+            titles, not two interviews.
 
             Reply with the fragment alone — not a sentence, no subject, no \
             verb tense, no markdown, no emoji, no closing full stop.
