@@ -50,6 +50,12 @@ struct DayMeeting: Identifiable, Equatable {
     let title: String
     let start: Date
     let end: Date
+    /// The call to join, where the invitation carries one (see
+    /// `MeetingLinks`). Nil for meetings that are just a room and a time.
+    var joinURL: URL?
+    /// EventKit's identifier for the event, so Calendar can be asked to
+    /// show this one rather than just the day.
+    var eventIdentifier: String?
 
     var durationMinutes: Int {
         max(0, Int(end.timeIntervalSince(start) / 60.0))
