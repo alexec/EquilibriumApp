@@ -35,12 +35,16 @@ focus and to relax, and to get the right work-life balance.
 - Days can be manually edited, overridden, or deleted, with an optional
   30-minute-increment break duration subtracted from the displayed hours.
 - Every day carries a morning intention (the sun above its bar) and an
-  end-of-day check-in (the moon below it), filled in once written.  Click
+  end-of-day check-in (the moon below it), filled in once recorded.  Click
   either — on any day, not just today — to bring that day up in the panel
   beside the chart, alongside its meetings.
+- Intentions and check-ins are **dictated, not typed**: press the
+  microphone beside a field and speak.  Recognition runs on-device, so the
+  audio is transcribed on your Mac and nothing is recorded or sent
+  anywhere.
 - The panel is always there, on today to begin with, and follows the chart
   to the same weekday as you page through weeks.  There's nothing to save:
-  what you type is written as you go.
+  what you dictate is written as you go.
 - Follows the system's light/dark appearance automatically.
 - Uses Apple's on-device LLM where it exists, but never depends on it: on
   macOS before 26, on Intel Macs, and with Apple Intelligence turned off,
@@ -59,6 +63,7 @@ Equilibrium runs in the **App Sandbox** and asks for as little as it can.
 |---|---|---|
 | Calendar (full access) | Optional | Splits tracked time into meetings vs. focus.  Decline and the app still tracks hours; bars just aren't annotated with meetings. |
 | Notifications | Optional | Daily intention / check-in reminders and the weekly summary. |
+| Microphone + Speech Recognition | Needed to dictate | Intentions and check-ins are spoken.  Recognition is pinned on-device, so audio never leaves the Mac and no recording is kept. |
 | Full Disk Access | **Never asked for** | Not used. |
 
 Notes:

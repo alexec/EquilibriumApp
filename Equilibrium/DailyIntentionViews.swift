@@ -21,7 +21,10 @@ enum MeetingTimeFormat {
 ///
 /// Both sections are always present — a day's intention and how it actually
 /// went belong on screen together, particularly when looking back — so
-/// which button was clicked only decides where the cursor starts.
+/// which button was clicked only decides which one is scrolled to.
+///
+/// Neither is typed: both are dictated, so each field is a transcript with
+/// a microphone beside it rather than a text box (see `Dictation`).
 struct DayDetailPanel: View {
     let day: Date
     let meetings: [DayMeeting]
@@ -40,12 +43,19 @@ struct DayDetailPanel: View {
     @State private var goals: String
     @State private var outcomes: String
     @State private var reflection: String
-    @FocusState private var focusedField: Field?
-    /// The pending debounced write; cancelled and replaced on each keystroke.
+    /// The pending debounced write; cancelled and replaced as text arrives.
     @State private var saveTask: Task<Void, Never>?
 
-    private enum Field {
+    @StateObject private var dictation = Dictation()
+    /// Which field the microphone is currently filling, if any.
+    @State private var dictatingField: Field?
+    /// What that field held when dictation started — a new run appends to
+    /// it rather than replacing what's already there.
+    @State private var textBeforeDictation = ""
+
+    private enum Field: Hashable {
         case goals
+        case outcomes
         case reflection
     }
 
@@ -83,42 +93,57 @@ struct DayDetailPanel: View {
 
                         sectionHeader("Intention", symbol: "sun.max")
                             .id(Field.goals)
-                        field(title: "Goals", prompt: "What do you want to accomplish?", text: $goals)
-                            .focused($focusedField, equals: .goals)
+                        dictationField(title: "Goals", prompt: "What do you want to accomplish?", field: .goals, text: $goals)
                             .onChange(of: goals) { _ in scheduleSave() }
-                        field(title: "Outcomes", prompt: "What does success look like?", text: $outcomes)
+                        dictationField(title: "Outcomes", prompt: "What does success look like?", field: .outcomes, text: $outcomes)
                             .onChange(of: outcomes) { _ in scheduleSave() }
 
                         if allowsCheckIn {
                             Divider()
 
                             sectionHeader("Check-in", symbol: "moon")
-                            field(
+                            dictationField(
                                 title: "How did it go?",
                                 prompt: "What landed, what didn't, what to carry forward?",
+                                field: .reflection,
                                 text: $reflection,
                                 lines: 3...6
                             )
-                            .focused($focusedField, equals: .reflection)
                             .id(Field.reflection)
                             .onChange(of: reflection) { _ in scheduleSave() }
                         }
                     }
                     .padding(.vertical, 12)
                 }
-                .onAppear { applyInitialFocus(proxy: proxy) }
+                .onAppear { scrollToSection(proxy: proxy) }
                 // The panel is rebuilt per day (see its `.id` at the call
                 // site), but clicking the other button on the *same* day only
                 // changes the kind, so the focus has to follow that too.
-                .onChange(of: initialFocus) { _ in applyInitialFocus(proxy: proxy) }
+                .onChange(of: initialFocus) { _ in scrollToSection(proxy: proxy) }
             }
         }
         // Whatever is still pending is written before this panel goes away —
-        // closing it, switching to another day, or the window shutting all
-        // land here, so nothing typed is lost by navigating away.
+        // switching to another day or the window shutting both land here, so
+        // nothing dictated is lost by navigating away.
         .onDisappear {
+            dictation.stop()
             saveTask?.cancel()
             onSave(goals, outcomes, reflection)
+        }
+        // Words arrive a few at a time while you speak; each update rewrites
+        // the field being dictated into, appended to whatever it held.
+        .onChange(of: dictation.transcript) { heard in
+            guard let dictatingField, !heard.isEmpty else { return }
+            let joined = textBeforeDictation.isEmpty ? heard : textBeforeDictation + " " + heard
+            switch dictatingField {
+            case .goals: goals = joined
+            case .outcomes: outcomes = joined
+            case .reflection: reflection = joined
+            }
+        }
+        // Recognition can also stop on its own — a long silence, or an error.
+        .onChange(of: dictation.isListening) { listening in
+            if !listening { dictatingField = nil }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
@@ -132,9 +157,10 @@ struct DayDetailPanel: View {
     static let width: CGFloat = 280
 
     /// There's no Save button: the panel isn't a dialog you finish with, so
-    /// typing is the whole interaction. Writes are debounced rather than
-    /// per-keystroke because each one rewrites the whole intentions file,
-    /// and the day's button filling in the chart is the confirmation.
+    /// speaking is the whole interaction. Writes are debounced rather than
+    /// applied on every recognised phrase, because each one rewrites the
+    /// whole intentions file, and the day's button filling in the chart is
+    /// the confirmation.
     private static let saveDebounce: Duration = .milliseconds(500)
 
     private func scheduleSave() {
@@ -146,18 +172,15 @@ struct DayDetailPanel: View {
         }
     }
 
-    /// Puts the cursor in the section whose button was clicked and scrolls
-    /// it into view — on a day with a full diary the check-in starts below
-    /// the fold, and focus alone would leave you typing into a field you
-    /// can't see.
+    /// Brings the section whose button was clicked into view — on a day
+    /// with a full diary the check-in starts below the fold. There's no
+    /// cursor to place any more: the fields take speech, not keystrokes.
     ///
-    /// Deferred a runloop turn: setting `@FocusState` while the panel is
-    /// still being placed doesn't take — the field it names isn't in the
-    /// hierarchy yet, and the focus is dropped.
-    private func applyInitialFocus(proxy: ScrollViewProxy) {
+    /// Deferred a runloop turn, since the section it names isn't in the
+    /// hierarchy yet while the panel is still being placed.
+    private func scrollToSection(proxy: ScrollViewProxy) {
         let field: Field = (initialFocus == .checkIn && allowsCheckIn) ? .reflection : .goals
         DispatchQueue.main.async {
-            focusedField = field
             withAnimation(.easeInOut(duration: 0.2)) {
                 proxy.scrollTo(field, anchor: field == .reflection ? .bottom : .top)
             }
@@ -240,25 +263,85 @@ struct DayDetailPanel: View {
         }
     }
 
-    private func field(
+    /// A field you speak into. There's no text box: intentions and
+    /// check-ins are dictated, so what's here is the transcript, the
+    /// microphone that fills it, and a way to wipe it and start again.
+    private func dictationField(
         title: String,
         prompt: String,
+        field: Field,
         text: Binding<String>,
         lines: ClosedRange<Int> = 2...4
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 11, weight: .medium))
-            TextField(prompt, text: text, axis: .vertical)
-                .lineLimit(lines)
-                .textFieldStyle(.plain)
+        let isDictating = dictatingField == field
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+                Spacer()
+                if !text.wrappedValue.isEmpty && !isDictating {
+                    Button("Clear") {
+                        text.wrappedValue = ""
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Clear \(title.lowercased())")
+                }
+                Button {
+                    toggleDictation(for: field, text: text)
+                } label: {
+                    Image(systemName: isDictating ? "stop.circle.fill" : "mic.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(isDictating ? .red : .accentColor)
+                }
+                .buttonStyle(.plain)
+                .help(isDictating ? "Stop dictating" : "Dictate \(title.lowercased())")
+                .accessibilityLabel(isDictating ? "Stop dictating \(title.lowercased())" : "Dictate \(title.lowercased())")
+            }
+
+            Text(text.wrappedValue.isEmpty ? prompt : text.wrappedValue)
                 .font(.system(size: 12))
+                .foregroundColor(text.wrappedValue.isEmpty ? .secondary.opacity(0.7) : .primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: CGFloat(lines.lowerBound) * 15, alignment: .topLeading)
                 .padding(8)
                 .background(
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.primary.opacity(0.05))
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.red.opacity(isDictating ? 0.5 : 0), lineWidth: 1)
+                )
+                .textSelection(.enabled)
+
+            if isDictating {
+                Text("Listening…")
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+            } else if let reason = dictation.unavailableReason, dictatingField == nil {
+                Text(reason)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
+    }
+
+    /// Starts the microphone on a field, or stops it if that field is
+    /// already the one being dictated into. Only one runs at a time.
+    private func toggleDictation(for field: Field, text: Binding<String>) {
+        guard dictatingField != field else {
+            dictation.stop()
+            dictatingField = nil
+            return
+        }
+        dictation.stop()
+        dictatingField = field
+        textBeforeDictation = text.wrappedValue
+        Task { await dictation.start() }
     }
 
     /// "Today" for today, otherwise the weekday and date — enough to be

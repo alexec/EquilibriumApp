@@ -12,5 +12,10 @@
 	     the alternative (write-only) cannot read events at all. -->
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
+	<!-- Microphone, for dictating intentions and check-ins. Recognition is
+	     pinned on-device, so the audio is transcribed here and never sent
+	     anywhere; the app still has no network entitlement at all. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

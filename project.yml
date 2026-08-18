@@ -29,6 +29,8 @@ targets:
         # macOS 14+ matches requestFullAccessToEvents() against the *FullAccess*
         # key; the plain key is the pre-14 spelling and is kept for macOS 13.
         INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Equilibrium listens when you dictate an intention or check-in. Speech is transcribed on this Mac and the recording is never stored or sent anywhere."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Equilibrium turns your dictated intentions and check-ins into text using on-device speech recognition. Nothing is sent off your Mac."
         INFOPLIST_KEY_NSCalendarsUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
