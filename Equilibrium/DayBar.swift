@@ -567,12 +567,37 @@ private struct WorkdayBlockView: View {
             let clamped = min(max(start, earliest), max(latest, earliest))
             return (clamped, clamped.addingTimeInterval(duration))
         case .resizeTop:
-            let limit = end.addingTimeInterval(-Self.minimumDuration)
-            return (min(max(start, bounds.lowerBound), limit), end)
+            // The far end is clamped too, not just the one being dragged:
+            // `WorkdayCalculator` can produce a span that starts before 6am,
+            // and resizing the other end would otherwise write that
+            // undrawable time straight back out again.
+            let fixedEnd = clamp(end, to: bounds)
+            var newStart = clamp(start, to: bounds)
+            if fixedEnd.timeIntervalSince(newStart) < Self.minimumDuration {
+                newStart = fixedEnd.addingTimeInterval(-Self.minimumDuration)
+            }
+            guard newStart >= bounds.lowerBound else {
+                // Only reachable when the end is itself within a quarter hour
+                // of the scale's start. The day has to be somewhere, so it
+                // takes the minimum from there rather than escaping upwards.
+                return (bounds.lowerBound, bounds.lowerBound.addingTimeInterval(Self.minimumDuration))
+            }
+            return (newStart, fixedEnd)
         case .resizeBottom:
-            let limit = start.addingTimeInterval(Self.minimumDuration)
-            return (start, max(min(end, bounds.upperBound), limit))
+            let fixedStart = clamp(start, to: bounds)
+            var newEnd = clamp(end, to: bounds)
+            if newEnd.timeIntervalSince(fixedStart) < Self.minimumDuration {
+                newEnd = fixedStart.addingTimeInterval(Self.minimumDuration)
+            }
+            guard newEnd <= bounds.upperBound else {
+                return (bounds.upperBound.addingTimeInterval(-Self.minimumDuration), bounds.upperBound)
+            }
+            return (fixedStart, newEnd)
         }
+    }
+
+    private func clamp(_ date: Date, to bounds: ClosedRange<Date>) -> Date {
+        min(max(date, bounds.lowerBound), bounds.upperBound)
     }
 
     /// The window the chart can actually draw, as real times on this day.
