@@ -628,6 +628,19 @@ final class WorkHistoryViewModel: ObservableObject {
         return nil
     }
 
+    /// Today's meetings that haven't finished — the one in progress first,
+    /// then everything still to come. What the menu bar's panel lists.
+    var remainingMeetingsToday: [DayMeeting] {
+        let now = Date()
+        return todaysMeetings.filter { $0.end > now }
+    }
+
+    /// Whether this meeting is happening right now.
+    func isInProgress(_ meeting: DayMeeting) -> Bool {
+        let now = Date()
+        return meeting.start <= now && meeting.end > now
+    }
+
     /// A day's calendar meetings with titles, for the panel's list. Past
     /// days work as well as today: EventKit keeps the events, so a day
     /// being edited weeks later still shows what was in the diary.

@@ -86,6 +86,30 @@ struct EquilibriumApp: App {
     }
 }
 
+/// Shows the main window, raising the one that exists rather than adding
+/// another.
+///
+/// `openWindow(id:)` appends a window to a `WindowGroup` every time it's
+/// called, so a notification tap, a menu bar click and a reminder over the
+/// course of a day left three identical windows stacked on top of each
+/// other, each with its own panel.
+enum MainWindow {
+    @MainActor
+    static func present(orOpen open: () -> Void) {
+        // SwiftUI names a `WindowGroup`'s windows after the group's id;
+        // anything else on screen belongs to the menu bar extra or a panel.
+        let existing = NSApp.windows.first { window in
+            window.identifier?.rawValue.hasPrefix("main") == true
+        }
+        if let existing {
+            existing.makeKeyAndOrderFront(nil)
+        } else {
+            open()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
 /// Hooks `openWindow` into `NotificationRouter` from a scene that always
 /// hosts a SwiftUI environment (the menu bar extra).
 private struct OpenWindowBinder: View {
@@ -98,8 +122,7 @@ private struct OpenWindowBinder: View {
             .accessibilityHidden(true)
             .onAppear {
                 router.openMainWindow = {
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
+                    MainWindow.present { openWindow(id: "main") }
                 }
             }
     }
@@ -141,6 +164,18 @@ private struct WindowChromeRemover: NSViewRepresentable {
         let view = NSView()
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+
+            // SwiftUI brings up two windows of the group at launch — seen as
+            // `main-AppWindow-1` and `-2`, both visible, one behind the
+            // other, each with its own day panel. Nothing in the app asks
+            // for the second, and one is all this app has any use for, so a
+            // later arrival stands down in favour of the first.
+            let mains = NSApp.windows.filter { $0.identifier?.rawValue.hasPrefix("main") == true }
+            if mains.count > 1, let first = mains.first, window !== first {
+                window.close()
+                return
+            }
+
             window.styleMask.insert(.resizable)
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden

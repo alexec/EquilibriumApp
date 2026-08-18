@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// The view shown inside the `MenuBarExtra` popover.
-/// Displays today's hours worked and the remaining weekly budget,
-/// and provides a button to open the main application window.
+/// The view shown inside the `MenuBarExtra` popover: today's hours worked,
+/// the remaining weekly budget, what's left of the day's diary, and a way
+/// into the main window.
+///
+/// The menu bar itself has room for one meeting; this is where the rest of
+/// them go, with their full titles rather than the sixteen characters that
+/// fit up there.
 struct MenuBarStatusView: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
     @Environment(\.openWindow) private var openWindow
@@ -19,16 +23,66 @@ struct MenuBarStatusView: View {
 
             Divider()
 
+            remainingMeetings
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
+
+            Divider()
+
             Button("Open Equilibrium") {
-                openWindow(id: "main")
-                NSApp.activate(ignoringOtherApps: true)
+                MainWindow.present { openWindow(id: "main") }
             }
             .buttonStyle(.plain)
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
-        .frame(minWidth: 200)
+        .frame(minWidth: 260)
     }
+
+    /// What's left of the day, in the order you'll meet it. The one in
+    /// progress is marked "now" rather than given a start time already gone
+    /// past — the same distinction the menu bar makes.
+    @ViewBuilder
+    private var remainingMeetings: some View {
+        let meetings = viewModel.remainingMeetingsToday
+
+        VStack(alignment: .leading, spacing: 5) {
+            Text("Rest of today")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if meetings.isEmpty {
+                Text(viewModel.calendarAccessGranted
+                     ? "Nothing else in the diary."
+                     : "Calendar access is off.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(meetings.prefix(Self.meetingLimit)) { meeting in
+                    let now = viewModel.isInProgress(meeting)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(now ? "now" : MeetingTimeFormat.compactTime(meeting.start))
+                            .font(.system(size: 11, weight: now ? .semibold : .regular).monospacedDigit())
+                            .foregroundStyle(now ? Color.accentColor : Color.secondary)
+                            .frame(width: 46, alignment: .leading)
+                        Text(meeting.title)
+                            .font(.system(size: 12))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                // A day with a dozen meetings shouldn't make a popover the
+                // height of the screen; the chart's panel has the full list.
+                if meetings.count > Self.meetingLimit {
+                    Text("+\(meetings.count - Self.meetingLimit) more")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private static let meetingLimit = 6
 
     // MARK: - Helpers
 
