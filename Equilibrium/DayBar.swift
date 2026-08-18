@@ -554,12 +554,17 @@ private struct WorkdayBlockView: View {
     /// on release, which is what stopped the capsule jumping at the end of
     /// every drag.
     ///
-    /// Only the edge being dragged is snapped. The other one keeps whatever
-    /// it was: these times come from real wake and sleep events, and
-    /// rounding a measurement the user didn't touch — turning a 9:07 start
-    /// into 9:05 because they adjusted the evening — would quietly falsify
-    /// the record. A day with one rounded end and one measured one is the
-    /// honest result of rounding one end.
+    /// Rounding is applied to what the drag actually moves, and nothing
+    /// else. Resizing snaps the edge you have hold of and leaves the far
+    /// one exactly as it was; moving snaps the start and carries the
+    /// original duration with it, so both ends shift together and the day
+    /// keeps its length.
+    ///
+    /// What that avoids is rounding a time nobody touched: these come from
+    /// real wake and sleep events, and turning a measured 9:07 start into
+    /// 9:05 because someone adjusted the evening would quietly falsify the
+    /// record. A day left with one rounded end and one measured one is the
+    /// honest result of having rounded one end.
     private func times(span: WorkdaySpan, mode: DragMode, deltaPoints: CGFloat) -> (Date, Date) {
         let delta = Double(deltaPoints) * secondsPerPoint
         var start = span.start
