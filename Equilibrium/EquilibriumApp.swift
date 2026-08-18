@@ -43,8 +43,12 @@ struct EquilibriumApp: App {
                     minWidth: 360 + panelWidth,
                     idealWidth: 420 + panelWidth,
                     maxWidth: 560 + panelWidth,
-                    minHeight: 520,
-                    maxHeight: 520
+                    // Tall enough that a day's summary and its three spoken
+                    // fields sit on screen together: the panel is permanent
+                    // furniture, and scrolling it to reach the check-in is
+                    // the thing this height buys off.
+                    minHeight: 600,
+                    maxHeight: 600
                 )
                 .background(WindowChromeRemover())
         }
@@ -101,21 +105,29 @@ private struct OpenWindowBinder: View {
     }
 }
 
-/// The compact label shown in the menu bar: today's hours / remaining budget.
+/// The compact label shown in the menu bar: hours left to work today, and
+/// what's next in the diary.
+///
+/// The line itself is built by the view model (`menuBarText`) rather than
+/// here. A `MenuBarExtra` label doesn't follow an observed object — a view
+/// built in it renders once and keeps what it was first given — so reading
+/// a published string in the App's own body is what makes it change.
+///
+/// The scales earn their place twice over: a bare figure in the menu bar
+/// belongs to no app in particular, and there's something to aim the
+/// pointer at when the number reads "0h".
 private struct MenuBarLabel: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
 
     var body: some View {
-        let today = viewModel.span(for: Date())?.effectiveHours ?? 0
-        let remaining = viewModel.remainingWeeklyHours()
-
-        let todayText = HoursFormat.string(today)
-        let remainingText = remaining >= 0
-            ? "\(HoursFormat.string(remaining)) left"
-            : "+\(HoursFormat.string(-remaining))"
-
-        Text("\(todayText)  \(remainingText)")
-            .font(.system(size: 12, weight: .medium, design: .rounded))
+        HStack(spacing: 3) {
+            Image(systemName: "scalemass")
+            Text(viewModel.menuBarText)
+        }
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        // One element, not a symbol read out beside a number.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(viewModel.menuBarAccessibilityLabel)
     }
 }
 

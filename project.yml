@@ -24,11 +24,27 @@ targets:
         ENABLE_APP_SANDBOX: YES
         CODE_SIGN_ENTITLEMENTS: Equilibrium/Equilibrium.entitlements
         CODE_SIGN_STYLE: Automatic
+        # Signing comes from the environment, not from this file. macOS
+        # records a permission grant against an app's code signature, and an
+        # ad-hoc signature is only its code hash — which changes on every
+        # build, so every rebuild asks for calendar access again as though
+        # it were a different app. Setting these locally stops that:
+        #
+        #   export EQUILIBRIUM_DEVELOPMENT_TEAM=YOURTEAMID
+        #   export EQUILIBRIUM_CODE_SIGN_IDENTITY="Apple Development"
+        #
+        # Unset — CI, a fork, anyone not in the team — they're empty and the
+        # build signs ad-hoc as it always did. A team baked in here would
+        # fail for everyone who isn't in it.
+        DEVELOPMENT_TEAM: ${EQUILIBRIUM_DEVELOPMENT_TEAM}
+        CODE_SIGN_IDENTITY: ${EQUILIBRIUM_CODE_SIGN_IDENTITY}
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         # macOS 14+ matches requestFullAccessToEvents() against the *FullAccess*
         # key; the plain key is the pre-14 spelling and is kept for macOS 13.
         INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Equilibrium listens when you dictate an intention or check-in. Speech is transcribed on this Mac and the recording is never stored or sent anywhere."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Equilibrium turns your dictated intentions and check-ins into text using on-device speech recognition. Nothing is sent off your Mac."
         INFOPLIST_KEY_NSCalendarsUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
