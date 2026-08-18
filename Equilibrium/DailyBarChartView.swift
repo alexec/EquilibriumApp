@@ -307,6 +307,16 @@ struct DailyBarChartView: View {
                 .font(.system(size: 9, weight: .regular))
                 .foregroundColor(.secondary.opacity(0.7))
 
+            // The day's total, under its date rather than floating above the
+            // bar: it belongs with the day's other labels, and up there it
+            // moved with the capsule, so a row of them sat at seven
+            // different heights.
+            if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
+                Text("\(hours)h")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
+            }
+
             // Delete / Reset-meetings buttons, revealed on hover so the bar
             // itself (only ~10pt wide) doesn't need to host them.
             HStack(spacing: 8) {
