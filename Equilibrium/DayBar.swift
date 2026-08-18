@@ -628,10 +628,16 @@ private struct WorkdayBlockView: View {
     /// Outside it the capsule would stop moving while the pointer kept
     /// going, which read as the drag sticking.
     private func chartBounds() -> ClosedRange<Date> {
-        let midnight = Calendar.current.startOfDay(for: day)
-        let first = midnight.addingTimeInterval(ChartScale.startHour * 3600)
-        let last = midnight.addingTimeInterval(ChartScale.endHour * 3600)
-        return first...last
+        // Built by calendar arithmetic rather than by adding seconds to
+        // midnight: on the day the clocks go forward, midnight plus six
+        // hours is 7am, and the bars are drawn against wall-clock times.
+        let calendar = Calendar.current
+        let midnight = calendar.startOfDay(for: day)
+        let first = calendar.date(bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: midnight) ?? midnight
+        // The scale's end hour is 24, which is no hour of this day — it's
+        // the start of the next one.
+        let last = calendar.date(byAdding: .day, value: 1, to: midnight) ?? midnight
+        return first...max(last, first)
     }
 
     // MARK: - Empty day: accept suggestion or draw a new one
