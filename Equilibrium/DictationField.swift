@@ -68,8 +68,8 @@ struct DictationField: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
-            microphone(size: 20)
+        VStack(spacing: 5) {
+            microphone(size: 18)
             Text(isListening ? "Listening…" : prompt)
                 .font(.system(size: 11))
                 .foregroundColor(isListening ? .red : .secondary)
@@ -77,7 +77,7 @@ struct DictationField: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
         .background(fieldBackground)
     }
 

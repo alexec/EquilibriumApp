@@ -142,11 +142,35 @@ enum WeeklyInsightGenerator {
         do {
             let response = try await session.respond(to: lines.joined(separator: "\n"))
             let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
+            guard !text.isEmpty, agrees(text, with: stats) else { return nil }
+            return text
         } catch {
             return nil
         }
     }
+    /// Whether a caption says the same thing as the figures it was given.
+    ///
+    /// The comparison is handed to the model already worked out and it is
+    /// told to use it as given, and it still answers "3 hours over target"
+    /// for a week that came in two and a half hours under. A caption that
+    /// contradicts the bars underneath it is worse than the plain sentence,
+    /// so one that does is thrown away and the deterministic line stands in.
+    /// Length is checked for the same reason: the brief asks for one short
+    /// sentence, and a four-clause recital is not the thing that was asked
+    /// for.
+    static func agrees(_ text: String, with stats: WeekHeaderStats) -> Bool {
+        let lowered = text.lowercased()
+        let saysOver = lowered.contains("over")
+        let saysUnder = lowered.contains("under")
+        let comparison = stats.targetComparison
+
+        if comparison.contains("under"), saysOver, !saysUnder { return false }
+        if comparison.contains("over"), saysUnder, !saysOver { return false }
+        if comparison == "right on target", saysOver || saysUnder { return false }
+
+        return text.split(separator: " ").count <= 24
+    }
+
     #else
     /// Framework isn't in this SDK at all; always unavailable.
     static func generateWeekHeaderSummary(for stats: WeekHeaderStats) async -> String? {

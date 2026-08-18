@@ -43,8 +43,12 @@ struct EquilibriumApp: App {
                     minWidth: 360 + panelWidth,
                     idealWidth: 420 + panelWidth,
                     maxWidth: 560 + panelWidth,
-                    minHeight: 520,
-                    maxHeight: 520
+                    // Tall enough that a day's summary and its three spoken
+                    // fields sit on screen together: the panel is permanent
+                    // furniture, and scrolling it to reach the check-in is
+                    // the thing this height buys off.
+                    minHeight: 600,
+                    maxHeight: 600
                 )
                 .background(WindowChromeRemover())
         }

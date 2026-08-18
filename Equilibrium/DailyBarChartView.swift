@@ -49,7 +49,10 @@ struct DailyBarChartView: View {
     @State private var insertionEdge: Edge = .trailing
 
     static let minimumHeight: CGFloat = 220
-    private static let labelHeight: CGFloat = 44
+    /// Weekday, date and total, stacked above each column.
+    private static let labelHeight: CGFloat = 40
+    /// The hover-revealed delete / reset row under each column.
+    private static let columnControlsHeight: CGFloat = 12
     // The intention button sits above each bar and the check-in below it,
     // one row of this height each, taken off the bars' own height.
     private static let promptRowHeight: CGFloat = 16
@@ -88,7 +91,8 @@ struct DailyBarChartView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let chartHeight = geo.size.height - Self.labelHeight - Self.weekHeaderHeight
+            let chartHeight = geo.size.height - Self.weekHeaderHeight
+                - Self.labelHeight - Self.columnControlsHeight
                 - (Self.promptRowHeight + Self.columnSpacing) * 2
 
             VStack(alignment: .leading, spacing: 4) {
@@ -101,10 +105,10 @@ struct DailyBarChartView: View {
                         width: Self.yAxisWidth,
                         label: yAxisLabel
                     )
-                    // The bars start a row lower than they used to, so the
-                    // hour labels have to drop by the same amount to keep
-                    // pointing at the right heights.
-                    .padding(.top, Self.promptRowHeight + Self.columnSpacing)
+                    // The bars start below the column header and the
+                    // intention button, so the hour labels drop by the same
+                    // amount to keep pointing at the right heights.
+                    .padding(.top, Self.labelHeight + Self.promptRowHeight + Self.columnSpacing)
 
                     dayColumns(chartHeight: chartHeight)
                         // Identity tied to the week, so changing week is an
@@ -202,6 +206,34 @@ struct DailyBarChartView: View {
         .help(label)
     }
 
+    /// Weekday, date and the day's total, above the column — where a
+    /// calendar puts its dates, and where they stay put: under the bar the
+    /// total sat at a different height in every column.
+    ///
+    /// The total's line is reserved even on a day without one, so seven
+    /// columns start their bars at the same height.
+    private func columnHeader(day: Date, span: WorkdaySpan?) -> some View {
+        VStack(spacing: 1) {
+            Text(weekdayLabel(day))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(dateLabel(day))
+                .font(.system(size: 9, weight: .regular))
+                .foregroundColor(.secondary.opacity(0.7))
+            Group {
+                if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
+                    Text("\(hours)h")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
+                } else {
+                    Text(" ")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+            }
+        }
+        .frame(height: Self.labelHeight, alignment: .top)
+    }
+
     /// A day's intention (above its bar) or check-in (below it): a sun for
     /// the morning and a moon for the evening, filled once something's been
     /// written and hollow while it hasn't. Clicking opens that day in the
@@ -275,6 +307,8 @@ struct DailyBarChartView: View {
         let isHovering = hoveringDay == day
 
         return VStack(spacing: 2) {
+            columnHeader(day: day, span: span)
+
             promptButton(day: day, kind: .intention)
                 .padding(.bottom, Self.columnSpacing - 2)
 
@@ -299,23 +333,6 @@ struct DailyBarChartView: View {
 
             promptButton(day: day, kind: .checkIn)
                 .padding(.top, Self.columnSpacing - 2)
-
-            Text(weekdayLabel(day))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
-            Text(dateLabel(day))
-                .font(.system(size: 9, weight: .regular))
-                .foregroundColor(.secondary.opacity(0.7))
-
-            // The day's total, under its date rather than floating above the
-            // bar: it belongs with the day's other labels, and up there it
-            // moved with the capsule, so a row of them sat at seven
-            // different heights.
-            if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
-                Text("\(hours)h")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
-            }
 
             // Delete / Reset-meetings buttons, revealed on hover so the bar
             // itself (only ~10pt wide) doesn't need to host them.
