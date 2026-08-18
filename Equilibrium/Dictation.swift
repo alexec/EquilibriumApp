@@ -61,14 +61,16 @@ final class Dictation: ObservableObject {
             return
         }
 
+        // Asking for permission suspends. A stop, or a newer start, while
+        // that was happening means this run is no longer the one wanted —
+        // checked before anything is built, so a cancelled run leaves
+        // nothing of itself behind.
+        guard thisStart == generation else { return }
+
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = true
         self.request = request
-
-        // Asking for permission suspends. A stop, or a newer start, while
-        // that was happening means this run is no longer the one wanted.
-        guard thisStart == generation else { return }
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)

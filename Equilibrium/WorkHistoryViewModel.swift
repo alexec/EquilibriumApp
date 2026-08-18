@@ -108,6 +108,11 @@ final class WorkHistoryViewModel: ObservableObject {
         spansByDay = store.load()
         intentionsByDay = intentionStore.load()
         calendarSelection = CalendarStore.shared.selection
+        // Built here so the menu bar has its figure from the first draw.
+        // Everything else that sets it waits on calendar access, which can
+        // take a while — or never come back — and the label would have sat
+        // there empty until it did.
+        refreshMenuBarText()
     }
 
     /// The `WeekHeaderStats` each week's summary was last generated from,
