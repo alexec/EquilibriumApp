@@ -455,7 +455,11 @@ private struct WorkdayBlockView: View {
         let workedHeight = barHeight * workedFraction
         let breakHeight = max(barHeight - workedHeight, 0)
 
-        let fire = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
+        // Heat from the live hours too, for the same reason: taken from the
+        // saved value, the capsule stayed calm all the way through a drag
+        // over the 8h line and only turned red once you let go.
+        let liveWorkedHours = Int(max(liveHours - breakHours, 0).rounded(.up))
+        let fire = DayFire.intensity(hours: liveWorkedHours, isWeekend: isWeekend)
         let workColor = DayFire.workColor(intensity: fire)
         let breakColor = DayFire.breakColor(intensity: fire)
 
@@ -549,6 +553,13 @@ private struct WorkdayBlockView: View {
     /// exactly what you get. Snapping and clamping happen here rather than
     /// on release, which is what stopped the capsule jumping at the end of
     /// every drag.
+    ///
+    /// Only the edge being dragged is snapped. The other one keeps whatever
+    /// it was: these times come from real wake and sleep events, and
+    /// rounding a measurement the user didn't touch — turning a 9:07 start
+    /// into 9:05 because they adjusted the evening — would quietly falsify
+    /// the record. A day with one rounded end and one measured one is the
+    /// honest result of rounding one end.
     private func times(span: WorkdaySpan, mode: DragMode, deltaPoints: CGFloat) -> (Date, Date) {
         let delta = Double(deltaPoints) * secondsPerPoint
         var start = span.start
