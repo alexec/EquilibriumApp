@@ -233,6 +233,10 @@ struct DailyBarChartView: View {
             }
             .buttonStyle(.plain)
             .help(helpText(kind: kind, filled: isFilled))
+            // Pointer users have the column under the cursor for context;
+            // VoiceOver has nothing, so the label names the day as well as
+            // what the button does.
+            .accessibilityLabel("\(helpText(kind: kind, filled: isFilled)), \(Self.accessibilityDayFormatter.string(from: day))")
         } else {
             Color.clear.frame(height: Self.promptRowHeight)
         }
@@ -244,6 +248,12 @@ struct DailyBarChartView: View {
         case .checkIn: return filled ? "moon.fill" : "moon"
         }
     }
+
+    private static let accessibilityDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE d MMMM"
+        return formatter
+    }()
 
     private func helpText(kind: DailyPromptKind, filled: Bool) -> String {
         switch kind {

@@ -8,6 +8,15 @@ enum DailyPromptKind: Equatable {
     case checkIn
 }
 
+/// How far the calendar permission has got. `pending` covers both "not
+/// asked yet" and "prompt still on screen": from the app's side they're the
+/// same wait, and both end when `requestAccess()` returns.
+enum CalendarAccessState: Equatable {
+    case pending
+    case granted
+    case denied
+}
+
 /// The day the side panel is editing, and which of its two sections asked
 /// to be edited — the panel always shows both, so the kind only decides
 /// where the keyboard focus lands.
@@ -20,7 +29,13 @@ struct DayEditorSelection: Equatable {
 final class WorkHistoryViewModel: ObservableObject {
     @Published var spansByDay: [String: WorkdaySpan] = [:]
     @Published var isLoading = false
-    @Published var calendarAccessGranted: Bool = false
+    /// Where calendar access has got to. Three states rather than a flag
+    /// because "not granted" covers two situations the UI shouldn't
+    /// conflate: still waiting on the prompt, and told no.
+    @Published var calendarAccess: CalendarAccessState = .pending
+    /// Whether meetings can be read right now — the question most of this
+    /// class asks, with the reason it can't left to the UI.
+    var calendarAccessGranted: Bool { calendarAccess == .granted }
     /// LLM-generated "You worked ..." caption per week, keyed by that
     /// week's first day (`dayKey`). Falls back to a deterministic sentence
     /// (see `WeeklyInsightGenerator.WeekHeaderStats.fallbackSentence`)
@@ -88,7 +103,7 @@ final class WorkHistoryViewModel: ObservableObject {
 
     /// Requests calendar access and kicks off the first data refresh.
     func requestCalendarAccessAndRefresh() async {
-        calendarAccessGranted = await CalendarStore.shared.requestAccess()
+        calendarAccess = await CalendarStore.shared.requestAccess() ? .granted : .denied
         if calendarAccessGranted {
             availableCalendars = CalendarStore.shared.availableCalendars()
         }

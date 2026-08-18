@@ -30,10 +30,10 @@ struct DayDetailPanel: View {
     /// to reflect on yet. Intentions stay editable, so tomorrow can be
     /// planned today.
     let allowsCheckIn: Bool
-    /// Distinguishes a day with no meetings from one whose meetings simply
-    /// can't be read yet — without it, an unanswered permission prompt
-    /// looks exactly like an empty diary.
-    let calendarAccessGranted: Bool
+    /// Distinguishes a day with no meetings from one whose meetings can't
+    /// be read — without it, an unanswered permission prompt and a refusal
+    /// both look exactly like an empty diary.
+    let calendarAccess: CalendarAccessState
     let initialFocus: DailyPromptKind
     let onSave: (String, String, String) -> Void
 
@@ -54,7 +54,7 @@ struct DayDetailPanel: View {
         meetings: [DayMeeting],
         existing: DailyIntention?,
         allowsCheckIn: Bool,
-        calendarAccessGranted: Bool,
+        calendarAccess: CalendarAccessState,
         initialFocus: DailyPromptKind,
         onSave: @escaping (String, String, String) -> Void
     ) {
@@ -62,7 +62,7 @@ struct DayDetailPanel: View {
         self.meetings = meetings
         self.existing = existing
         self.allowsCheckIn = allowsCheckIn
-        self.calendarAccessGranted = calendarAccessGranted
+        self.calendarAccess = calendarAccess
         self.initialFocus = initialFocus
         self.onSave = onSave
         _goals = State(initialValue: existing?.goals ?? "")
@@ -190,7 +190,7 @@ struct DayDetailPanel: View {
             sectionHeader("Meetings", symbol: "calendar")
 
             if meetings.isEmpty {
-                Text(calendarAccessGranted ? "No meetings on the calendar." : "Waiting on calendar access.")
+                Text(emptyMeetingsMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else if meetings.count > Self.meetingsShownInFull {
@@ -205,6 +205,18 @@ struct DayDetailPanel: View {
             } else {
                 meetingRows
             }
+        }
+    }
+
+    /// Why there are no meetings listed. "None" is a fact about the day;
+    /// the other two are facts about the app, and saying the wrong one
+    /// invites someone to go looking for a permission they already
+    /// answered — or to assume their diary was empty when it wasn't.
+    private var emptyMeetingsMessage: String {
+        switch calendarAccess {
+        case .granted: return "No meetings on the calendar."
+        case .pending: return "Waiting on calendar access."
+        case .denied: return "Calendar access is off, so meetings aren't shown."
         }
     }
 
@@ -255,8 +267,21 @@ struct DayDetailPanel: View {
         if calendar.isDate(day, inSameDayAs: today) {
             return "Today"
         }
-        let formatter = DateFormatter()
-        formatter.dateFormat = calendar.isDate(day, equalTo: today, toGranularity: .year) ? "EEEE d MMM" : "EEE d MMM yyyy"
-        return formatter.string(from: day)
+        let thisYear = calendar.isDate(day, equalTo: today, toGranularity: .year)
+        return (thisYear ? dayInYearFormatter : dayWithYearFormatter).string(from: day)
     }
+
+    // Built once rather than per render: this is read on every pass over the
+    // panel's body, and a DateFormatter is expensive to construct.
+    private static let dayInYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE d MMM"
+        return formatter
+    }()
+
+    private static let dayWithYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d MMM yyyy"
+        return formatter
+    }()
 }
