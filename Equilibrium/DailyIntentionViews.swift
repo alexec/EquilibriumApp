@@ -278,7 +278,11 @@ struct DayDetailPanel: View {
                 if meetingsExpanded || !startsCollapsed {
                     meetingRows
                 }
-                if startsCollapsed || meetingsExpanded {
+                // Only where folding is possible. Offered whenever the list
+                // was expanded, "Show less" outlived the reason for it — a
+                // gist clearing, a day losing meetings — and pressing it
+                // then did nothing, because the list shows regardless.
+                if startsCollapsed {
                     disclosure(
                         meetingsExpanded ? "Show less" : "Show all \(meetings.count)",
                         expanded: !meetingsExpanded

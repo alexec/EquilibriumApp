@@ -507,10 +507,16 @@ final class WorkHistoryViewModel: ObservableObject {
         )
     }
 
-    /// Hours still to work today: what's left of the week's target, spread
-    /// over the weekdays still to come, today included. It falls as the day
-    /// is worked, reaches zero once the week's budget is spent, and asks for
+    /// Hours still to work today: today's share of what the week has left,
+    /// less what today has already had. It counts down as the day is
+    /// worked, reaches zero when today's share is used up, and asks for
     /// nothing at the weekend.
+    ///
+    /// Today's own hours are held back from the share and subtracted at the
+    /// end rather than folded into the week's total: spread across the days
+    /// still to come — today among them — a full day's work would come back
+    /// as a fifth of itself still to do, and the figure would never reach
+    /// zero.
     ///
     /// Deliberately not `WorkloadRecommender.recommendedHours(for:)`, which
     /// answers a different question — what an untouched day should hold —
@@ -521,16 +527,18 @@ final class WorkHistoryViewModel: ObservableObject {
         guard !WeekCalendar.isWeekend(today, calendar: calendar) else { return 0 }
 
         let week = currentWeekDays()
-        let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
-        let remainingBudget = preferences.weeklyTargetHours - worked
-        guard remainingBudget > 0 else { return 0 }
+        let workedToday = span(for: today)?.effectiveHours ?? 0
+        let workedEarlier = week
+            .filter { $0 < today }
+            .reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
 
         let daysLeft = week.filter {
             !WeekCalendar.isWeekend($0, calendar: calendar) && $0 >= today
         }.count
         guard daysLeft > 0 else { return 0 }
 
-        return remainingBudget / Double(daysLeft)
+        let share = (preferences.weeklyTargetHours - workedEarlier) / Double(daysLeft)
+        return max(share - workedToday, 0)
     }
 
     /// Hours worked this week subtracted from the configured weekly target.
