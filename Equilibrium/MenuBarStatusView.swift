@@ -108,6 +108,9 @@ struct MenuBarStatusView: View {
                     Image(systemName: "video.fill")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.accentColor)
+                        // Padded inside the hit shape, as in the day panel:
+                        // an 11pt glyph is a hard thing to click at.
+                        .padding(4)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

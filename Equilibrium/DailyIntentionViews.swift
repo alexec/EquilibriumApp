@@ -389,6 +389,11 @@ struct DayDetailPanel: View {
                             Image(systemName: "video.fill")
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.accentColor)
+                                // The camera is small because it sits beside
+                                // the title rather than competing with it;
+                                // what you aim at shouldn't be that small, so
+                                // the padding is inside the shape being hit.
+                                .padding(4)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
