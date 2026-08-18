@@ -112,6 +112,10 @@ final class WorkHistoryViewModel: ObservableObject {
             availableCalendars = CalendarStore.shared.availableCalendars()
         }
         refresh()
+        // The day the panel opens on never goes through `selectDay`, and
+        // until access resolves there are no meetings to describe anyway —
+        // so this is the first moment today's summary can be asked for.
+        refreshMeetingGist()
     }
 
     /// Records a new calendar choice and re-reads meeting data so days

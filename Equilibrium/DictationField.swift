@@ -21,6 +21,11 @@ struct DictationField: View {
     @Binding var text: String
     let isListening: Bool
     let onToggle: () -> Void
+    /// Clearing has to go through the panel rather than just emptying the
+    /// binding: if this field is mid-dictation, the next recognised phrase
+    /// would be appended to the text that was there when it started and put
+    /// it all straight back.
+    let onClear: () -> Void
 
     /// Height of the text area once there's something in it, in lines, so
     /// the panel doesn't jump as words arrive.
@@ -39,7 +44,7 @@ struct DictationField: View {
                     .font(.system(size: 11, weight: .medium))
                 Spacer()
                 if !isEmpty {
-                    Button("Clear") { text = "" }
+                    Button("Clear", action: onClear)
                         .buttonStyle(.plain)
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)

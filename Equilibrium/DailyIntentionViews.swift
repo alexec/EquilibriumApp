@@ -104,16 +104,18 @@ struct DayDetailPanel: View {
                             title: "Goals",
                             prompt: "What do you want to accomplish?",
                             text: $goals,
-                            isListening: dictatingField == .goals,
-                            onToggle: { toggleDictation(for: .goals, text: $goals) }
+                            isListening: isListening(.goals),
+                            onToggle: { toggleDictation(for: .goals, text: $goals) },
+                            onClear: { clearField(.goals, text: $goals) }
                         )
                         .onChange(of: goals) { _ in scheduleSave() }
                         DictationField(
                             title: "Outcomes",
                             prompt: "What does success look like?",
                             text: $outcomes,
-                            isListening: dictatingField == .outcomes,
-                            onToggle: { toggleDictation(for: .outcomes, text: $outcomes) }
+                            isListening: isListening(.outcomes),
+                            onToggle: { toggleDictation(for: .outcomes, text: $outcomes) },
+                            onClear: { clearField(.outcomes, text: $outcomes) }
                         )
                         .onChange(of: outcomes) { _ in scheduleSave() }
 
@@ -125,12 +127,20 @@ struct DayDetailPanel: View {
                                 title: "How did it go?",
                                 prompt: "What landed, what didn't, what to carry forward?",
                                 text: $reflection,
-                                isListening: dictatingField == .reflection,
+                                isListening: isListening(.reflection),
                                 onToggle: { toggleDictation(for: .reflection, text: $reflection) },
+                                onClear: { clearField(.reflection, text: $reflection) },
                                 minimumLines: 3
                             )
                             .id(Field.reflection)
                             .onChange(of: reflection) { _ in scheduleSave() }
+                        }
+
+                        if let reason = dictation.unavailableReason {
+                            Text(reason)
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(.vertical, 12)
@@ -251,23 +261,26 @@ struct DayDetailPanel: View {
                 Text(emptyMeetingsMessage)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-            } else if meetings.count > Self.meetingsShownInFull && !meetingsExpanded {
-                // A summary rather than a scrolling window onto the list: a
-                // heavy day used to hide most of its own diary inside a
-                // fixed-height box, and pushed the intention and check-in
-                // down regardless.
-                summarisedMeetings
             } else {
-                meetingRows
+                // The summary leads whatever the day's length: it's what the
+                // day was, where the list below is what the day contained.
+                summary
+
+                if meetings.count <= Self.meetingsShownInFull || meetingsExpanded {
+                    meetingRows
+                }
                 if meetings.count > Self.meetingsShownInFull {
-                    disclosure("Show less", expanded: false)
+                    disclosure(
+                        meetingsExpanded ? "Show less" : "Show all \(meetings.count)",
+                        expanded: !meetingsExpanded
+                    )
                 }
             }
         }
     }
 
-    private var summarisedMeetings: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private var summary: some View {
+        VStack(alignment: .leading, spacing: 3) {
             if let countAndHours = MeetingSummaryGenerator.countAndHours(meetings) {
                 Text(countAndHours)
                     .font(.system(size: 12, weight: .medium))
@@ -278,7 +291,6 @@ struct DayDetailPanel: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            disclosure("Show all \(meetings.count)", expanded: true)
         }
     }
 
@@ -330,7 +342,35 @@ struct DayDetailPanel: View {
         dictation.stop()
         dictatingField = field
         textBeforeDictation = text.wrappedValue
-        Task { await dictation.start() }
+        Task {
+            await dictation.start()
+            // A refused permission or a missing on-device model means the
+            // engine never starts, and `isListening` never changes — so
+            // nothing would clear the field's recording state, and its
+            // microphone would sit there looking live.
+            if !dictation.isListening {
+                dictatingField = nil
+            }
+        }
+    }
+
+    /// True only while this field is the one being dictated into *and* the
+    /// engine is actually running, so a microphone never claims to be
+    /// listening when it isn't.
+    private func isListening(_ field: Field) -> Bool {
+        dictatingField == field && dictation.isListening
+    }
+
+    /// Wipes a field, stopping dictation into it first: otherwise the next
+    /// recognised phrase arrives appended to the text that was there when
+    /// dictation began, undoing the clear.
+    private func clearField(_ field: Field, text: Binding<String>) {
+        if dictatingField == field {
+            dictation.stop()
+            dictatingField = nil
+        }
+        textBeforeDictation = ""
+        text.wrappedValue = ""
     }
 
     /// "Today" for today, otherwise the weekday and date — enough to be
