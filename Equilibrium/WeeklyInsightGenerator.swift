@@ -159,9 +159,16 @@ enum WeeklyInsightGenerator {
     /// sentence, and a four-clause recital is not the thing that was asked
     /// for.
     static func agrees(_ text: String, with stats: WeekHeaderStats) -> Bool {
-        let lowered = text.lowercased()
-        let saysOver = lowered.contains("over")
-        let saysUnder = lowered.contains("under")
+        // Whole words: "overall" is not a claim about being over target, and
+        // rejecting a caption for containing it would quietly disable the
+        // feature for perfectly good sentences.
+        let words = Set(
+            text.lowercased()
+                .split(whereSeparator: { !$0.isLetter })
+                .map(String.init)
+        )
+        let saysOver = words.contains("over")
+        let saysUnder = words.contains("under")
         let comparison = stats.targetComparison
 
         if comparison.contains("under"), saysOver, !saysUnder { return false }

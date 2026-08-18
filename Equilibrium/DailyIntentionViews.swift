@@ -171,19 +171,10 @@ struct DayDetailPanel: View {
             case .reflection: reflection = joined
             }
         }
-        // A phrase arriving is not a reason to fold away a list someone is
-        // reading. Days open collapsed when there's already a phrase; one
-        // that turns up later leaves what's on screen where it is, and the
-        // disclosure now offers to fold it.
-        .onChange(of: meetingGist) { gist in
-            if gist != nil, !meetingsExpanded, meetings.count <= Self.meetingsShownInFull {
-                meetingsExpanded = true
-            }
-        }
-        // Recognition can also stop on its own — a long silence, or an error.
-        .onChange(of: dictation.isListening) { listening in
-            if !listening { dictatingField = nil }
-        }
+        // Recognition stopping on its own — a long silence, an error — needs
+        // no handling: `isListening(_:)` consults the engine, so every
+        // microphone returns to its idle state on its own. Clearing
+        // `dictatingField` from here is what raced the switch between fields.
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .frame(width: Self.width)
@@ -299,6 +290,11 @@ struct DayDetailPanel: View {
 
     /// Whether the list starts folded away.
     ///
+    /// `meetingsExpanded` is only ever set by the disclosure, so the two
+    /// together already do the right thing when a phrase arrives after the
+    /// panel opens: a list standing open merely because nothing described
+    /// the day yet folds away, and one the reader opened stays open.
+    ///
     /// A phrase describing the day is enough to know what the day was, so
     /// where there's one the titles wait behind "Show all" — they're the
     /// record, wanted when you go looking, not every time you glance. With
@@ -369,17 +365,19 @@ struct DayDetailPanel: View {
             return
         }
         dictation.stop()
-        dictatingField = field
-        textBeforeDictation = text.wrappedValue
+        dictatingField = nil
+        let base = text.wrappedValue
         Task { @MainActor in
             await dictation.start()
-            // A refused permission or a missing on-device model means the
-            // engine never starts, and `isListening` never changes — so
-            // nothing would clear the field's recording state, and its
-            // microphone would sit there looking live.
-            if !dictation.isListening {
-                dictatingField = nil
-            }
+            // Claimed only once the engine is actually running. Setting it
+            // beforehand raced the stop above: that flips `isListening`,
+            // and the observer reacting to it could clear the field after
+            // this had already pointed at the new one — leaving dictation
+            // running with nowhere to put the words. A refused permission
+            // lands here too, and simply leaves no field claimed.
+            guard dictation.isListening else { return }
+            textBeforeDictation = base
+            dictatingField = field
         }
     }
 

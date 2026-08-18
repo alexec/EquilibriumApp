@@ -507,6 +507,32 @@ final class WorkHistoryViewModel: ObservableObject {
         )
     }
 
+    /// Hours still to work today: what's left of the week's target, spread
+    /// over the weekdays still to come, today included. It falls as the day
+    /// is worked, reaches zero once the week's budget is spent, and asks for
+    /// nothing at the weekend.
+    ///
+    /// Deliberately not `WorkloadRecommender.recommendedHours(for:)`, which
+    /// answers a different question — what an untouched day should hold —
+    /// and stops answering at all once a day has any hours on it. The menu
+    /// bar needs a figure that counts down while you work.
+    func remainingHoursToday() -> Double {
+        let today = calendar.startOfDay(for: Date())
+        guard !WeekCalendar.isWeekend(today, calendar: calendar) else { return 0 }
+
+        let week = currentWeekDays()
+        let worked = week.reduce(0.0) { $0 + (span(for: $1)?.effectiveHours ?? 0) }
+        let remainingBudget = preferences.weeklyTargetHours - worked
+        guard remainingBudget > 0 else { return 0 }
+
+        let daysLeft = week.filter {
+            !WeekCalendar.isWeekend($0, calendar: calendar) && $0 >= today
+        }.count
+        guard daysLeft > 0 else { return 0 }
+
+        return remainingBudget / Double(daysLeft)
+    }
+
     /// Hours worked this week subtracted from the configured weekly target.
     /// Positive means hours remain; negative means already over budget.
     func remainingWeeklyHours() -> Double {
@@ -609,15 +635,16 @@ final class WorkHistoryViewModel: ObservableObject {
         lastGistMeetings[key] = signature
 
         Task {
+            let gist = await MeetingSummaryGenerator.generateGist(for: meetings)
+            // The day's meetings can change again while the model is
+            // thinking, in which case a second generation is already under
+            // way and this answer describes a list nobody is looking at.
+            guard lastGistMeetings[key] == signature else { return }
             // Assigned even when nothing comes back, which clears the key:
-            // the signature above has already been recorded, so nothing will
-            // ask again for this list, and keeping the old phrase would
-            // leave it sitting under meetings it no longer describes.
-            //
-            // The panel may have moved on while the model was thinking; the
-            // answer is still for `key`, and is shown whenever that day is
-            // next on screen.
-            meetingGists[key] = await MeetingSummaryGenerator.generateGist(for: meetings)
+            // the signature has been recorded, so nothing will ask again for
+            // this list, and keeping the old phrase would leave it sitting
+            // under meetings it no longer describes.
+            meetingGists[key] = gist
         }
     }
 

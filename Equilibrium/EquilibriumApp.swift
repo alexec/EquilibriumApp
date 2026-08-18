@@ -105,21 +105,22 @@ private struct OpenWindowBinder: View {
     }
 }
 
-/// The compact label shown in the menu bar: today's hours / remaining budget.
+/// The compact label shown in the menu bar: hours left to work today.
+///
+/// One number, with the app's mark beside it. A bare figure in the menu bar
+/// belongs to no app in particular — every one up there is somebody's
+/// number — so the scales say whose it is, and give something to aim the
+/// pointer at when the figure reads "0h".
 private struct MenuBarLabel: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
 
     var body: some View {
-        let today = viewModel.span(for: Date())?.effectiveHours ?? 0
-        let remaining = viewModel.remainingWeeklyHours()
-
-        let todayText = HoursFormat.string(today)
-        let remainingText = remaining >= 0
-            ? "\(HoursFormat.string(remaining)) left"
-            : "+\(HoursFormat.string(-remaining))"
-
-        Text("\(todayText)  \(remainingText)")
-            .font(.system(size: 12, weight: .medium, design: .rounded))
+        HStack(spacing: 3) {
+            Image(systemName: "scalemass")
+            Text(HoursFormat.string(viewModel.remainingHoursToday()))
+        }
+        .font(.system(size: 12, weight: .medium, design: .rounded))
+        .accessibilityLabel("\(HoursFormat.string(viewModel.remainingHoursToday())) left to work today")
     }
 }
 

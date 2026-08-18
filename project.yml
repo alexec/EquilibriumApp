@@ -24,6 +24,13 @@ targets:
         ENABLE_APP_SANDBOX: YES
         CODE_SIGN_ENTITLEMENTS: Equilibrium/Equilibrium.entitlements
         CODE_SIGN_STYLE: Automatic
+        # Signed with a real identity rather than ad-hoc. macOS records a
+        # permission grant against an app's code signature, and an ad-hoc
+        # signature is only its code hash — which changes on every build, so
+        # every rebuild asked for calendar access again as though it were a
+        # different app. With a team, the grant survives rebuilds.
+        DEVELOPMENT_TEAM: 6T4RVD5724
+        CODE_SIGN_IDENTITY: "Apple Development"
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
         # macOS 14+ matches requestFullAccessToEvents() against the *FullAccess*

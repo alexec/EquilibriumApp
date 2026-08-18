@@ -49,8 +49,10 @@ struct DailyBarChartView: View {
     @State private var insertionEdge: Edge = .trailing
 
     static let minimumHeight: CGFloat = 220
-    /// Weekday, date and total, stacked above each column.
-    private static let labelHeight: CGFloat = 40
+    /// Weekday and date, stacked above each column.
+    private static let labelHeight: CGFloat = 27
+    /// The day's total, under the check-in moon.
+    private static let totalHeight: CGFloat = 13
     /// The hover-revealed delete / reset row under each column.
     private static let columnControlsHeight: CGFloat = 12
     // The intention button sits above each bar and the check-in below it,
@@ -92,7 +94,7 @@ struct DailyBarChartView: View {
     var body: some View {
         GeometryReader { geo in
             let chartHeight = geo.size.height - Self.weekHeaderHeight
-                - Self.labelHeight - Self.columnControlsHeight
+                - Self.labelHeight - Self.totalHeight - Self.columnControlsHeight
                 - (Self.promptRowHeight + Self.columnSpacing) * 2
 
             VStack(alignment: .leading, spacing: 4) {
@@ -206,13 +208,8 @@ struct DailyBarChartView: View {
         .help(label)
     }
 
-    /// Weekday, date and the day's total, above the column — where a
-    /// calendar puts its dates, and where they stay put: under the bar the
-    /// total sat at a different height in every column.
-    ///
-    /// The total's line is reserved even on a day without one, so seven
-    /// columns start their bars at the same height.
-    private func columnHeader(day: Date, span: WorkdaySpan?) -> some View {
+    /// Weekday and date above the column, where a calendar puts them.
+    private func columnHeader(day: Date) -> some View {
         VStack(spacing: 1) {
             Text(weekdayLabel(day))
                 .font(.system(size: 11, weight: .medium))
@@ -220,18 +217,27 @@ struct DailyBarChartView: View {
             Text(dateLabel(day))
                 .font(.system(size: 9, weight: .regular))
                 .foregroundColor(.secondary.opacity(0.7))
-            Group {
-                if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
-                    Text("\(hours)h")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
-                } else {
-                    Text(" ")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-            }
         }
         .frame(height: Self.labelHeight, alignment: .top)
+    }
+
+    /// The day's total, under the check-in moon: the date says which day
+    /// this is, and this says what it came to — the two ends of the column.
+    ///
+    /// Its line is reserved on days without one so that what sits below it
+    /// keeps a common baseline across the week.
+    private func columnTotal(day: Date, span: WorkdaySpan?) -> some View {
+        Group {
+            if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
+                Text("\(hours)h")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
+            } else {
+                Text(" ")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+        }
+        .frame(height: Self.totalHeight)
     }
 
     /// A day's intention (above its bar) or check-in (below it): a sun for
@@ -307,7 +313,7 @@ struct DailyBarChartView: View {
         let isHovering = hoveringDay == day
 
         return VStack(spacing: 2) {
-            columnHeader(day: day, span: span)
+            columnHeader(day: day)
 
             promptButton(day: day, kind: .intention)
                 .padding(.bottom, Self.columnSpacing - 2)
@@ -333,6 +339,8 @@ struct DailyBarChartView: View {
 
             promptButton(day: day, kind: .checkIn)
                 .padding(.top, Self.columnSpacing - 2)
+
+            columnTotal(day: day, span: span)
 
             // Delete / Reset-meetings buttons, revealed on hover so the bar
             // itself (only ~10pt wide) doesn't need to host them.
