@@ -100,21 +100,34 @@ struct DayDetailPanel: View {
 
                         sectionHeader("Intention", symbol: "sun.max")
                             .id(Field.goals)
-                        dictationField(title: "Goals", prompt: "What do you want to accomplish?", field: .goals, text: $goals)
-                            .onChange(of: goals) { _ in scheduleSave() }
-                        dictationField(title: "Outcomes", prompt: "What does success look like?", field: .outcomes, text: $outcomes)
-                            .onChange(of: outcomes) { _ in scheduleSave() }
+                        DictationField(
+                            title: "Goals",
+                            prompt: "What do you want to accomplish?",
+                            text: $goals,
+                            isListening: dictatingField == .goals,
+                            onToggle: { toggleDictation(for: .goals, text: $goals) }
+                        )
+                        .onChange(of: goals) { _ in scheduleSave() }
+                        DictationField(
+                            title: "Outcomes",
+                            prompt: "What does success look like?",
+                            text: $outcomes,
+                            isListening: dictatingField == .outcomes,
+                            onToggle: { toggleDictation(for: .outcomes, text: $outcomes) }
+                        )
+                        .onChange(of: outcomes) { _ in scheduleSave() }
 
                         if allowsCheckIn {
                             Divider()
 
                             sectionHeader("Check-in", symbol: "moon")
-                            dictationField(
+                            DictationField(
                                 title: "How did it go?",
                                 prompt: "What landed, what didn't, what to carry forward?",
-                                field: .reflection,
                                 text: $reflection,
-                                lines: 3...6
+                                isListening: dictatingField == .reflection,
+                                onToggle: { toggleDictation(for: .reflection, text: $reflection) },
+                                minimumLines: 3
                             )
                             .id(Field.reflection)
                             .onChange(of: reflection) { _ in scheduleSave() }
@@ -179,17 +192,20 @@ struct DayDetailPanel: View {
         }
     }
 
-    /// Brings the section whose button was clicked into view — on a day
-    /// with a full diary the check-in starts below the fold. There's no
-    /// cursor to place any more: the fields take speech, not keystrokes.
+    /// Brings the check-in into view when that's what was clicked — on a
+    /// day with a full diary it starts below the fold.
+    ///
+    /// Nothing happens for an intention: it sits near the top already, and
+    /// scrolling to it pushed the day's meetings off the top of the panel,
+    /// which are the context you write the intention against.
     ///
     /// Deferred a runloop turn, since the section it names isn't in the
     /// hierarchy yet while the panel is still being placed.
     private func scrollToSection(proxy: ScrollViewProxy) {
-        let field: Field = (initialFocus == .checkIn && allowsCheckIn) ? .reflection : .goals
+        guard initialFocus == .checkIn, allowsCheckIn else { return }
         DispatchQueue.main.async {
             withAnimation(.easeInOut(duration: 0.2)) {
-                proxy.scrollTo(field, anchor: field == .reflection ? .bottom : .top)
+                proxy.scrollTo(Field.reflection, anchor: .bottom)
             }
         }
     }
@@ -299,73 +315,6 @@ struct DayDetailPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    /// A field you speak into. There's no text box: intentions and
-    /// check-ins are dictated, so what's here is the transcript, the
-    /// microphone that fills it, and a way to wipe it and start again.
-    private func dictationField(
-        title: String,
-        prompt: String,
-        field: Field,
-        text: Binding<String>,
-        lines: ClosedRange<Int> = 2...4
-    ) -> some View {
-        let isDictating = dictatingField == field
-
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-                Spacer()
-                if !text.wrappedValue.isEmpty && !isDictating {
-                    Button("Clear") {
-                        text.wrappedValue = ""
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .accessibilityLabel("Clear \(title.lowercased())")
-                }
-                Button {
-                    toggleDictation(for: field, text: text)
-                } label: {
-                    Image(systemName: isDictating ? "stop.circle.fill" : "mic.fill")
-                        .font(.system(size: 12))
-                        .foregroundColor(isDictating ? .red : .accentColor)
-                }
-                .buttonStyle(.plain)
-                .help(isDictating ? "Stop dictating" : "Dictate \(title.lowercased())")
-                .accessibilityLabel(isDictating ? "Stop dictating \(title.lowercased())" : "Dictate \(title.lowercased())")
-            }
-
-            Text(text.wrappedValue.isEmpty ? prompt : text.wrappedValue)
-                .font(.system(size: 12))
-                .foregroundColor(text.wrappedValue.isEmpty ? .secondary.opacity(0.7) : .primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, minHeight: CGFloat(lines.lowerBound) * 15, alignment: .topLeading)
-                .padding(8)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(0.05))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.red.opacity(isDictating ? 0.5 : 0), lineWidth: 1)
-                )
-                .textSelection(.enabled)
-
-            if isDictating {
-                Text("Listening…")
-                    .font(.system(size: 10))
-                    .foregroundColor(.red)
-            } else if let reason = dictation.unavailableReason, dictatingField == nil {
-                Text(reason)
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
