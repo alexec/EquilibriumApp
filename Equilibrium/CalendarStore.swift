@@ -139,7 +139,14 @@ final class CalendarStore {
                 let title = (event.title?.trimmingCharacters(in: .whitespacesAndNewlines))
                     .flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled meeting"
                 let id = event.eventIdentifier ?? "\(title)-\(start.timeIntervalSinceReferenceDate)"
-                return DayMeeting(id: id, title: title, start: start, end: end)
+                return DayMeeting(
+                    id: id,
+                    title: title,
+                    start: start,
+                    end: end,
+                    joinURL: MeetingLinks.joinURL(for: event),
+                    eventIdentifier: event.eventIdentifier
+                )
             }
             .sorted { $0.start < $1.start }
     }

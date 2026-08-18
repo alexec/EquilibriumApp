@@ -59,17 +59,7 @@ struct MenuBarStatusView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(meetings.prefix(Self.meetingLimit)) { meeting in
-                    let now = viewModel.isInProgress(meeting)
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(now ? "now" : MeetingTimeFormat.compactTime(meeting.start))
-                            .font(.system(size: 11, weight: now ? .semibold : .regular).monospacedDigit())
-                            .foregroundStyle(now ? Color.accentColor : Color.secondary)
-                            .frame(width: 46, alignment: .leading)
-                        Text(meeting.title)
-                            .font(.system(size: 12))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    meetingRow(meeting)
                 }
                 // A day with a dozen meetings shouldn't make a popover the
                 // height of the screen; the chart's panel has the full list.
@@ -78,6 +68,51 @@ struct MenuBarStatusView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+
+    /// A meeting: its time, its title, and the call if it has one.
+    ///
+    /// Two targets rather than one, because there are two things you want
+    /// from a meeting in a hurry and they aren't the same thing. The row
+    /// opens the event in Calendar, where the agenda and the other guests
+    /// are; the camera joins the call.
+    private func meetingRow(_ meeting: DayMeeting) -> some View {
+        let now = viewModel.isInProgress(meeting)
+
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Button {
+                MeetingLinks.showInCalendar(identifier: meeting.eventIdentifier, on: meeting.start)
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(now ? "now" : MeetingTimeFormat.compactTime(meeting.start))
+                        .font(.system(size: 11, weight: now ? .semibold : .regular).monospacedDigit())
+                        .foregroundStyle(now ? Color.accentColor : Color.secondary)
+                        .frame(width: 46, alignment: .leading)
+                    Text(meeting.title)
+                        .font(.system(size: 12))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Show in Calendar")
+
+            if let joinURL = meeting.joinURL {
+                Button {
+                    MeetingLinks.join(joinURL)
+                } label: {
+                    Image(systemName: "video.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.accentColor)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Join \(joinURL.host ?? "the call")")
+                .accessibilityLabel("Join \(meeting.title)")
             }
         }
     }
