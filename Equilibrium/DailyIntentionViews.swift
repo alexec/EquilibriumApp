@@ -258,9 +258,20 @@ struct DayDetailPanel: View {
             sectionHeader("Meetings", symbol: "calendar")
 
             if meetings.isEmpty {
-                Text(emptyMeetingsMessage)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(emptyMeetingsMessage)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    // A prompt that never arrives, or one dismissed weeks
+                    // ago, looks identical to one still on its way. Saying
+                    // where the switch lives costs a line and saves a hunt.
+                    if calendarAccess != .granted {
+                        Text("System Settings › Privacy & Security › Calendars")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             } else {
                 // The summary leads whatever the day's length: it's what the
                 // day was, where the list below is what the day contained.

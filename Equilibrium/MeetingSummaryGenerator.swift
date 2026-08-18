@@ -44,6 +44,10 @@ enum MeetingSummaryGenerator {
             similar titles under one word rather than listing them all — \
             "interviews", not each interview by name.
 
+            Never use the words "meeting" or "meetings": the reader is \
+            looking at a list of them under a heading that says so, and the \
+            word tells them nothing. Name what the entries were about.
+
             Never write a number, in digits or in words. The count and the \
             hours are shown already, and a second count that disagrees with \
             them is worse than none: two entries for one interview are two \
