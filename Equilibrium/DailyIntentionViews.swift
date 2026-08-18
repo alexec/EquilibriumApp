@@ -362,17 +362,41 @@ struct DayDetailPanel: View {
     /// Above this many, the day arrives summarised.
     private static let meetingsShownInFull = 4
 
+    /// The day's meetings, each with the camera that joins its call where
+    /// the invitation carries one — the same button the menu bar's list
+    /// has, in the same place, since this is the list you're looking at
+    /// when the window is already open and the menu bar isn't.
     private var meetingRows: some View {
         VStack(alignment: .leading, spacing: 6) {
             ForEach(meetings) { meeting in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(meeting.title)
-                        .font(.system(size: 12))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
+                            .font(.system(size: 10).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text(meeting.title)
+                            .font(.system(size: 12))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let joinURL = meeting.joinURL {
+                        Button {
+                            MeetingLinks.join(joinURL)
+                        } label: {
+                            Image(systemName: "video.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.accentColor)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Join \(joinURL.host ?? "the call")")
+                        // The row already reads out its title and time; the
+                        // camera has to name the meeting itself, or it's an
+                        // unlabelled button next to six identical ones.
+                        .accessibilityLabel("Join \(meeting.title)")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -427,14 +451,16 @@ struct DayDetailPanel: View {
         text.wrappedValue = ""
     }
 
-    /// "Today" for today, otherwise the weekday and date — enough to be
-    /// sure which bar the panel belongs to.
+    /// The weekday and date, with "Today" in front of it on the day it is
+    /// — enough to be sure which bar the panel belongs to.
+    ///
+    /// Today keeps its date rather than trading it away for the word: on
+    /// its own, "Today" is the one title that never says which column is
+    /// meant, and it's the title on screen most of the time.
     static func dayTitle(_ day: Date, today: Date = Date(), calendar: Calendar = .current) -> String {
-        if calendar.isDate(day, inSameDayAs: today) {
-            return "Today"
-        }
         let thisYear = calendar.isDate(day, equalTo: today, toGranularity: .year)
-        return (thisYear ? dayInYearFormatter : dayWithYearFormatter).string(from: day)
+        let date = (thisYear ? dayInYearFormatter : dayWithYearFormatter).string(from: day)
+        return calendar.isDate(day, inSameDayAs: today) ? "Today · \(date)" : date
     }
 
     // Built once rather than per render: this is read on every pass over the

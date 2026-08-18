@@ -49,8 +49,9 @@ struct DailyBarChartView: View {
     @State private var insertionEdge: Edge = .trailing
 
     static let minimumHeight: CGFloat = 220
-    /// Weekday and date, stacked above each column.
-    private static let labelHeight: CGFloat = 27
+    /// Weekday and date, stacked above each column — two points taller
+    /// than the text alone needs, for the capsule drawn round today's date.
+    private static let labelHeight: CGFloat = 29
     /// The day's total, under the check-in moon.
     private static let totalHeight: CGFloat = 13
     /// The hover-revealed delete / reset row under each column.
@@ -227,17 +228,43 @@ struct DailyBarChartView: View {
         .help(label)
     }
 
-    /// Weekday and date above the column, where a calendar puts them.
+    /// Weekday and date above the column, where a calendar puts them —
+    /// with today's date in a filled capsule and its weekday in full
+    /// strength, the way a calendar marks the current date.
+    ///
+    /// Without it the only clue which column is now is which one still has
+    /// hours in it, and that reads wrong exactly when it matters: before
+    /// the day's first work is recorded, today is indistinguishable from
+    /// tomorrow, both of them an empty track under a row of meetings.
+    ///
+    /// A capsule rather than a circle because `dateLabel` is sometimes a
+    /// month as well as a number, and a circle round "Aug 18" is an oval
+    /// pretending otherwise. The padding is applied on every day so that
+    /// midnight, which moves the capsule one column along, doesn't also
+    /// shift the labels either side of it.
     private func columnHeader(day: Date) -> some View {
-        VStack(spacing: 1) {
+        let isToday = Calendar.current.isDateInToday(day)
+
+        return VStack(spacing: 1) {
             Text(weekdayLabel(day))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.secondary)
+                .font(.system(size: 11, weight: isToday ? .semibold : .medium))
+                .foregroundColor(isToday ? .primary : .secondary)
             Text(dateLabel(day))
-                .font(.system(size: 9, weight: .regular))
-                .foregroundColor(.secondary.opacity(0.7))
+                .font(.system(size: 9, weight: isToday ? .semibold : .regular))
+                .foregroundColor(isToday ? .white : .secondary.opacity(0.7))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(isToday ? Color.accentColor : .clear))
         }
         .frame(height: Self.labelHeight, alignment: .top)
+        // The capsule is colour alone, which VoiceOver doesn't see; the
+        // date is read out either way, so this only has to add the word.
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            isToday
+                ? "Today, \(Self.accessibilityDayFormatter.string(from: day))"
+                : Self.accessibilityDayFormatter.string(from: day)
+        )
     }
 
     /// The day's total, under the check-in moon: the date says which day
@@ -280,7 +307,12 @@ struct DailyBarChartView: View {
             } label: {
                 Image(systemName: symbolName(kind: kind, filled: isFilled))
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(isFilled ? .accentColor : .secondary.opacity(0.4))
+                    // Filled in the text colour rather than the accent:
+                    // the accent now means "this is the day you're looking
+                    // at" — the capsule on today and the band behind the
+                    // selected column — and a sun wearing it too would be
+                    // a third meaning for the same colour.
+                    .foregroundColor(isFilled ? .primary : .secondary.opacity(0.4))
                     .frame(width: Self.promptRowHeight, height: Self.promptRowHeight)
                     .background(
                         Circle()
@@ -327,9 +359,15 @@ struct DailyBarChartView: View {
         }
     }
 
+    /// One day's column. A band behind the whole of it marks the day the
+    /// side panel is showing: the accent ring on a 16pt sun says which
+    /// *prompt* is open but is far too small to say which day, so the panel
+    /// could sit on Thursday's check-in with nothing on the chart admitting
+    /// it. Band for the day, ring for the prompt — two jobs, two marks.
     private func dayColumn(day: Date, index: Int, chartHeight: CGFloat) -> some View {
         let span = spans[index]
         let isHovering = hoveringDay == day
+        let isSelected = Calendar.current.isDate(selection.day, inSameDayAs: day)
 
         return VStack(spacing: Self.columnStackSpacing) {
             columnHeader(day: day)
@@ -388,6 +426,10 @@ struct DailyBarChartView: View {
             .frame(height: 12)
         }
         .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor.opacity(isSelected ? 0.1 : 0))
+        )
         .contentShape(Rectangle())
         .onHover { hovering in
             hoveringDay = hovering ? day : (hoveringDay == day ? nil : hoveringDay)
