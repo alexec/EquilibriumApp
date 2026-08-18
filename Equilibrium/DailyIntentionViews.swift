@@ -37,6 +37,9 @@ struct DayDetailPanel: View {
     /// be read — without it, an unanswered permission prompt and a refusal
     /// both look exactly like an empty diary.
     let calendarAccess: CalendarAccessState
+    /// The on-device model's phrase for this day's meetings, when there is
+    /// one. Never load-bearing: the count and hours are computed.
+    let meetingGist: String?
     let initialFocus: DailyPromptKind
     let onSave: (String, String, String) -> Void
 
@@ -52,6 +55,8 @@ struct DayDetailPanel: View {
     /// What that field held when dictation started — a new run appends to
     /// it rather than replacing what's already there.
     @State private var textBeforeDictation = ""
+    /// Long diaries start summarised; the list is one click away.
+    @State private var meetingsExpanded = false
 
     private enum Field: Hashable {
         case goals
@@ -65,6 +70,7 @@ struct DayDetailPanel: View {
         existing: DailyIntention?,
         allowsCheckIn: Bool,
         calendarAccess: CalendarAccessState,
+        meetingGist: String?,
         initialFocus: DailyPromptKind,
         onSave: @escaping (String, String, String) -> Void
     ) {
@@ -73,6 +79,7 @@ struct DayDetailPanel: View {
         self.existing = existing
         self.allowsCheckIn = allowsCheckIn
         self.calendarAccess = calendarAccess
+        self.meetingGist = meetingGist
         self.initialFocus = initialFocus
         self.onSave = onSave
         _goals = State(initialValue: existing?.goals ?? "")
@@ -208,29 +215,6 @@ struct DayDetailPanel: View {
         .foregroundStyle(.secondary)
     }
 
-    private var meetingsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("Meetings", symbol: "calendar")
-
-            if meetings.isEmpty {
-                Text(emptyMeetingsMessage)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            } else if meetings.count > Self.meetingsShownInFull {
-                // A heavy day's diary would otherwise push the intention and
-                // check-in off the bottom of the panel — the two things this
-                // is for. Past this many, the list scrolls within its own
-                // fixed height and the fields below stay put.
-                ScrollView {
-                    meetingRows
-                }
-                .frame(height: Self.longMeetingListHeight)
-            } else {
-                meetingRows
-            }
-        }
-    }
-
     /// Why there are no meetings listed. "None" is a fact about the day;
     /// the other two are facts about the app, and saying the wrong one
     /// invites someone to go looking for a permission they already
@@ -243,8 +227,64 @@ struct DayDetailPanel: View {
         }
     }
 
+    private var meetingsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader("Meetings", symbol: "calendar")
+
+            if meetings.isEmpty {
+                Text(emptyMeetingsMessage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else if meetings.count > Self.meetingsShownInFull && !meetingsExpanded {
+                // A summary rather than a scrolling window onto the list: a
+                // heavy day used to hide most of its own diary inside a
+                // fixed-height box, and pushed the intention and check-in
+                // down regardless.
+                summarisedMeetings
+            } else {
+                meetingRows
+                if meetings.count > Self.meetingsShownInFull {
+                    disclosure("Show less", expanded: false)
+                }
+            }
+        }
+    }
+
+    private var summarisedMeetings: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let countAndHours = MeetingSummaryGenerator.countAndHours(meetings) {
+                Text(countAndHours)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            if let meetingGist {
+                Text(meetingGist)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            disclosure("Show all \(meetings.count)", expanded: true)
+        }
+    }
+
+    private func disclosure(_ title: String, expanded: Bool) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                meetingsExpanded = expanded
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.up")
+                    .font(.system(size: 8, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Above this many, the day arrives summarised.
     private static let meetingsShownInFull = 4
-    private static let longMeetingListHeight: CGFloat = 132
 
     private var meetingRows: some View {
         VStack(alignment: .leading, spacing: 6) {

@@ -47,6 +47,10 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
+    /// LLM phrase describing a day's meetings, keyed by `dayKey`. Missing
+    /// wherever the model is unavailable or hasn't answered yet — the panel
+    /// shows the count and hours regardless.
+    @Published var meetingGists: [String: String] = [:]
     /// The day shown in the panel beside the chart. Always set — the panel
     /// is permanent furniture rather than something you open — so this
     /// starts on today and only ever moves to another day.
@@ -565,6 +569,37 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Points the panel at `day`, focused on one of its two sections.
     func selectDay(_ day: Date, kind: DailyPromptKind) {
         dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
+        refreshMeetingGist()
+    }
+
+    /// Asks the on-device model for a phrase describing the panel's day, if
+    /// it hasn't already got one. Keyed by day and generated once: the
+    /// meetings for a past day don't change, and the panel is rebuilt every
+    /// time you click a different column.
+    func refreshMeetingGist() {
+        guard MeetingSummaryGenerator.isAvailable else { return }
+        guard #available(macOS 26.0, *) else { return }
+
+        let day = dayEditor.day
+        let key = dayKey(for: day)
+        guard meetingGists[key] == nil else { return }
+        let meetings = meetings(for: day)
+        guard meetings.count > 1 else { return }
+
+        Task {
+            let gist = await MeetingSummaryGenerator.generateGist(for: meetings)
+            // The panel may have moved on while the model was thinking; the
+            // answer is still for `key`, so it's stored either way and shown
+            // whenever that day is next on screen.
+            if let gist {
+                meetingGists[key] = gist
+            }
+        }
+    }
+
+    /// The phrase for a day's meetings, or nil while there isn't one.
+    func meetingGist(for day: Date) -> String? {
+        meetingGists[dayKey(for: day)]
     }
 
     /// Points the panel at today (from the menu bar or a notification tap).

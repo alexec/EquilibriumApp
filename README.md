@@ -38,6 +38,10 @@ focus and to relax, and to get the right work-life balance.
   end-of-day check-in (the moon below it), filled in once recorded.  Click
   either — on any day, not just today — to bring that day up in the panel
   beside the chart, alongside its meetings.
+- A day with more than four meetings arrives summarised — "5 meetings ·
+  10½h", plus a short phrase from the on-device model where there is one —
+  with the full list one click away, so a heavy diary doesn't crowd out
+  the day's intention.
 - Intentions and check-ins are **dictated, not typed**: press the
   microphone beside a field and speak.  Recognition runs on-device, so the
   audio is transcribed on your Mac and nothing is recorded or sent

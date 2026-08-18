@@ -15,6 +15,7 @@ struct ContentView: View {
                 existing: viewModel.intention(for: editor.day),
                 allowsCheckIn: editor.day <= Calendar.current.startOfDay(for: Date()),
                 calendarAccess: viewModel.calendarAccess,
+                meetingGist: viewModel.meetingGist(for: editor.day),
                 initialFocus: editor.kind,
                 // Nothing to dismiss and nothing to confirm: text is written
                 // as it's typed, and the day's button filling in behind the
