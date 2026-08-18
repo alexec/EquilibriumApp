@@ -11,6 +11,25 @@ enum MeetingTimeFormat {
     static func rangeLabel(start: Date, end: Date) -> String {
         "\(range.string(from: start)) – \(range.string(from: end))"
     }
+
+    /// "2pm", "2:15pm" — no minutes on the hour, which is where most
+    /// meetings start. Four characters of menu bar saved on most of them.
+    static func compactTime(_ date: Date, calendar: Calendar = .current) -> String {
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        let suffix = hour < 12 ? "am" : "pm"
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return minute == 0
+            ? "\(displayHour)\(suffix)"
+            : "\(displayHour):\(String(format: "%02d", minute))\(suffix)"
+    }
+
+    /// Enough of a title to recognise the meeting by, not enough to push
+    /// every other app off the menu bar.
+    static func shortTitle(_ title: String, limit: Int = 16) -> String {
+        guard title.count > limit else { return title }
+        return title.prefix(limit).trimmingCharacters(in: .whitespaces) + "…"
+    }
 }
 
 /// One day's meetings, intention and check-in, edited in a panel beside the

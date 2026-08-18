@@ -47,6 +47,21 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
+    /// Today's meetings with their titles, kept here so the menu bar can
+    /// name the next one without a calendar query on every redraw.
+    @Published private(set) var todaysMeetings: [DayMeeting] = []
+    /// Spoken form of the same line, which spells out the meeting's full
+    /// title: the menu bar truncates for space, VoiceOver has no such
+    /// problem and every reason to say the whole thing.
+    @Published private(set) var menuBarAccessibilityLabel: String = ""
+    /// What the menu bar reads, as a finished string.
+    ///
+    /// Published rather than computed in the view because a `MenuBarExtra`
+    /// label doesn't follow an observed object: a child view built there is
+    /// rendered once and keeps whatever it was first given — today's
+    /// meetings arrive a second later and never showed up. Publishing the
+    /// text puts the change in the App's own body, which does get rebuilt.
+    @Published private(set) var menuBarText: String = ""
     /// LLM phrase describing a day's meetings, keyed by `dayKey`. Missing
     /// wherever the model is unavailable or hasn't answered yet — the panel
     /// shows the count and hours regardless.
@@ -72,6 +87,7 @@ final class WorkHistoryViewModel: ObservableObject {
     private let liveEventStore = LiveEventStore()
     private let calendar: Calendar = .current
     private var autoRefreshTimer: Timer?
+    private var menuBarTimer: Timer?
     private lazy var powerMonitor: PowerNotificationMonitor = {
         PowerNotificationMonitor { [weak self] event in
             Task { @MainActor in
@@ -118,6 +134,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // until access resolves there are no meetings to describe anyway —
         // so this is the first moment today's summary can be asked for.
         refreshMeetingGist()
+        refreshTodaysMeetings()
     }
 
     /// Records a new calendar choice and re-reads meeting data so days
@@ -138,12 +155,20 @@ final class WorkHistoryViewModel: ObservableObject {
         autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: Self.autoRefreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        // A minute, not five: the menu bar's line moves on its own as the
+        // day passes — the figure counts down, and a meeting drops off the
+        // moment it ends — without any of the data behind it changing.
+        menuBarTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshMenuBarText() }
+        }
     }
 
     func stopAutoRefresh() {
         powerMonitor.stop()
         autoRefreshTimer?.invalidate()
         autoRefreshTimer = nil
+        menuBarTimer?.invalidate()
+        menuBarTimer = nil
     }
 
     func refresh() {
@@ -167,6 +192,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 let yesterday = self.dayKey(for: self.calendar.date(byAdding: .day, value: -1, to: Date())!)
                 self.spansByDay = self.store.merge(freshSpans: freshSpans, today: today, yesterday: yesterday)
                 self.isLoading = false
+                self.refreshMenuBarText()
                 WeeklySummaryNotifier.fireIfNeeded(store: self.store, weeklyTargetHours: self.preferences.weeklyTargetHours)
                 self.refreshWeekHeaderSummaries()
             }
@@ -305,6 +331,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // describe — refresh those that changed.
         refreshWeekHeaderSummaries()
         refreshMeetingGist()
+        refreshTodaysMeetings()
     }
 
     /// Drag-clamp bounds for a meeting: the workday when one exists,
@@ -564,6 +591,17 @@ final class WorkHistoryViewModel: ObservableObject {
         intentionsByDay[dayKey(for: day)]
     }
 
+    /// The next meeting still to come today — the one in progress counts,
+    /// since that's the one you're in. Nil when the calendar can't be read
+    /// or the day's meetings are behind you.
+    ///
+    /// Read from the cached list rather than from EventKit, so it can be
+    /// asked for as often as a view cares to draw.
+    var nextMeetingToday: DayMeeting? {
+        let now = Date()
+        return todaysMeetings.first { $0.end > now }
+    }
+
     /// A day's calendar meetings with titles, for the panel's list. Past
     /// days work as well as today: EventKit keeps the events, so a day
     /// being edited weeks later still shows what was in the diary.
@@ -654,6 +692,25 @@ final class WorkHistoryViewModel: ObservableObject {
             // under meetings it no longer describes.
             meetingGists[key] = gist
         }
+    }
+
+    /// Rebuilds the menu bar's line: hours left today, then the next
+    /// meeting when there is one.
+    func refreshMenuBarText() {
+        let left = HoursFormat.string(remainingHoursToday())
+        guard let next = nextMeetingToday else {
+            menuBarText = left
+            menuBarAccessibilityLabel = "\(left) left to work today"
+            return
+        }
+        menuBarText = "\(left) · \(MeetingTimeFormat.compactTime(next.start)) \(MeetingTimeFormat.shortTitle(next.title))"
+        menuBarAccessibilityLabel = "\(left) left to work today. Next: \(next.title) at \(MeetingTimeFormat.compactTime(next.start))"
+    }
+
+    /// Re-reads today's meetings into the cache the menu bar reads from.
+    func refreshTodaysMeetings() {
+        todaysMeetings = meetings(for: Date()).sorted { $0.start < $1.start }
+        refreshMenuBarText()
     }
 
     /// The phrase for a day's meetings, or nil while there isn't one.

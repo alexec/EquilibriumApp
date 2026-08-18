@@ -25,22 +25,22 @@ final class Dictation: ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
-    /// A start is in progress. `isListening` doesn't turn true until the
-    /// engine is running, and the permission check before that suspends —
-    /// long enough for a second press to walk in behind the first and
-    /// install a second tap on the same input.
-    private var isStarting = false
-    /// Bumped by every start and every stop, so a start that was suspended
-    /// when the microphone was turned off can tell that it's been overtaken
-    /// and leave the engine alone.
+    /// Bumped by every start and every stop. `isListening` doesn't turn
+    /// true until the engine is running, and the permission check before
+    /// that suspends — long enough for a second press to walk in behind the
+    /// first. Each start remembers the number it took, and only the newest
+    /// one is allowed to touch the engine, so a run that has been overtaken
+    /// or stopped bows out instead of installing a second tap on the input.
+    ///
+    /// A counter rather than a flag because a flag would have to be held
+    /// for the whole permission prompt — which can sit on screen for as
+    /// long as it likes — and every press during it would be swallowed.
     private var generation = 0
 
     func start() async {
-        guard !isListening, !isStarting else { return }
-        isStarting = true
+        guard !isListening else { return }
         generation += 1
         let thisStart = generation
-        defer { isStarting = false }
         transcript = ""
         unavailableReason = nil
 
@@ -66,8 +66,8 @@ final class Dictation: ObservableObject {
         request.requiresOnDeviceRecognition = true
         self.request = request
 
-        // Asking for permission suspends, and a press of stop while that
-        // was happening means this run is no longer wanted.
+        // Asking for permission suspends. A stop, or a newer start, while
+        // that was happening means this run is no longer the one wanted.
         guard thisStart == generation else { return }
 
         let input = engine.inputNode
@@ -105,11 +105,16 @@ final class Dictation: ObservableObject {
         }
     }
 
+    /// Safe to call at any point, including while a start is still waiting
+    /// on permission: bumping the counter is what tells that run to stand
+    /// down, and everything below is cleared whether or not the engine ever
+    /// got going.
     func stop() {
         generation += 1
-        guard isListening || engine.isRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        if engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         request?.endAudio()
         task?.cancel()
         request = nil
