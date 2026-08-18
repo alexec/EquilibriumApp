@@ -164,7 +164,13 @@ final class WorkHistoryViewModel: ObservableObject {
         // day passes — the figure counts down, and a meeting drops off the
         // moment it ends — without any of the data behind it changing.
         menuBarTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refreshMenuBarText() }
+            Task { @MainActor in
+                // Re-reads the diary, not just the clock: a meeting moved or
+                // added shows up within the minute, and the day's own
+                // meetings are re-fetched after midnight rather than the app
+                // naming yesterday's.
+                self?.refreshTodaysMeetings()
+            }
         }
     }
 
@@ -596,15 +602,43 @@ final class WorkHistoryViewModel: ObservableObject {
         intentionsByDay[dayKey(for: day)]
     }
 
-    /// The next meeting still to come today — the one in progress counts,
-    /// since that's the one you're in. Nil when the calendar can't be read
-    /// or the day's meetings are behind you.
+    /// Whether a meeting is happening now or still to come, since the menu
+    /// bar has to say which: a meeting that started at 8:35 and runs to
+    /// 10:00 is the one you're in at 9:25, and showing its start time reads
+    /// as a stale "next".
+    enum MeetingStanding: Equatable {
+        case now
+        case next
+    }
+
+    /// The meeting the menu bar should name: the one in progress if there is
+    /// one, otherwise the next to start. Nil when the calendar can't be read
+    /// or the day's meetings are all behind you.
     ///
     /// Read from the cached list rather than from EventKit, so it can be
     /// asked for as often as a view cares to draw.
-    var nextMeetingToday: DayMeeting? {
+    var currentOrNextMeeting: (meeting: DayMeeting, standing: MeetingStanding)? {
         let now = Date()
-        return todaysMeetings.first { $0.end > now }
+        if let inProgress = todaysMeetings.first(where: { $0.start <= now && $0.end > now }) {
+            return (inProgress, .now)
+        }
+        if let upcoming = todaysMeetings.first(where: { $0.start > now }) {
+            return (upcoming, .next)
+        }
+        return nil
+    }
+
+    /// Today's meetings that haven't finished — the one in progress first,
+    /// then everything still to come. What the menu bar's panel lists.
+    var remainingMeetingsToday: [DayMeeting] {
+        let now = Date()
+        return todaysMeetings.filter { $0.end > now }
+    }
+
+    /// Whether this meeting is happening right now.
+    func isInProgress(_ meeting: DayMeeting) -> Bool {
+        let now = Date()
+        return meeting.start <= now && meeting.end > now
     }
 
     /// A day's calendar meetings with titles, for the panel's list. Past
@@ -703,13 +737,24 @@ final class WorkHistoryViewModel: ObservableObject {
     /// meeting when there is one.
     func refreshMenuBarText() {
         let left = HoursFormat.string(remainingHoursToday())
-        guard let next = nextMeetingToday else {
+        guard let (meeting, standing) = currentOrNextMeeting else {
             menuBarText = left
             menuBarAccessibilityLabel = "\(left) left to work today"
             return
         }
-        menuBarText = "\(left) · \(MeetingTimeFormat.compactTime(next.start)) \(MeetingTimeFormat.shortTitle(next.title))"
-        menuBarAccessibilityLabel = "\(left) left to work today. Next: \(next.title) at \(MeetingTimeFormat.compactTime(next.start))"
+
+        let title = MeetingTimeFormat.shortTitle(meeting.title)
+        switch standing {
+        case .now:
+            // What matters about a meeting you're already in is when it lets
+            // you go, so this shows the end rather than the start — and says
+            // "to", so it can't be mistaken for something starting then.
+            menuBarText = "\(left) · \(title) to \(MeetingTimeFormat.compactTime(meeting.end))"
+            menuBarAccessibilityLabel = "\(left) left to work today. In \(meeting.title) until \(MeetingTimeFormat.compactTime(meeting.end))"
+        case .next:
+            menuBarText = "\(left) · \(MeetingTimeFormat.compactTime(meeting.start)) \(title)"
+            menuBarAccessibilityLabel = "\(left) left to work today. Next: \(meeting.title) at \(MeetingTimeFormat.compactTime(meeting.start))"
+        }
     }
 
     /// Re-reads today's meetings into the cache the menu bar reads from.
