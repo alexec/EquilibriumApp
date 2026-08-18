@@ -171,6 +171,15 @@ struct DayDetailPanel: View {
             case .reflection: reflection = joined
             }
         }
+        // A phrase arriving is not a reason to fold away a list someone is
+        // reading. Days open collapsed when there's already a phrase; one
+        // that turns up later leaves what's on screen where it is, and the
+        // disclosure now offers to fold it.
+        .onChange(of: meetingGist) { gist in
+            if gist != nil, !meetingsExpanded, meetings.count <= Self.meetingsShownInFull {
+                meetingsExpanded = true
+            }
+        }
         // Recognition can also stop on its own — a long silence, or an error.
         .onChange(of: dictation.isListening) { listening in
             if !listening { dictatingField = nil }

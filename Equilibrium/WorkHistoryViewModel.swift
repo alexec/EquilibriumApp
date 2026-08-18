@@ -593,7 +593,14 @@ final class WorkHistoryViewModel: ObservableObject {
         let day = dayEditor.day
         let key = dayKey(for: day)
         let meetings = meetings(for: day)
-        guard meetings.count > 1 else { return }
+        guard meetings.count > 1 else {
+            // A day whose meetings have gone — a different calendar chosen,
+            // an event deleted — shouldn't keep a phrase describing the ones
+            // it used to have.
+            meetingGists[key] = nil
+            lastGistMeetings[key] = nil
+            return
+        }
 
         let signature = meetings
             .map { "\($0.id)|\($0.start.timeIntervalSinceReferenceDate)|\($0.end.timeIntervalSinceReferenceDate)|\($0.title)" }
@@ -602,13 +609,15 @@ final class WorkHistoryViewModel: ObservableObject {
         lastGistMeetings[key] = signature
 
         Task {
-            let gist = await MeetingSummaryGenerator.generateGist(for: meetings)
+            // Assigned even when nothing comes back, which clears the key:
+            // the signature above has already been recorded, so nothing will
+            // ask again for this list, and keeping the old phrase would
+            // leave it sitting under meetings it no longer describes.
+            //
             // The panel may have moved on while the model was thinking; the
-            // answer is still for `key`, so it's stored either way and shown
-            // whenever that day is next on screen.
-            if let gist {
-                meetingGists[key] = gist
-            }
+            // answer is still for `key`, and is shown whenever that day is
+            // next on screen.
+            meetingGists[key] = await MeetingSummaryGenerator.generateGist(for: meetings)
         }
     }
 
