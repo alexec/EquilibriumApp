@@ -273,14 +273,12 @@ struct DayDetailPanel: View {
                     }
                 }
             } else {
-                // The summary leads whatever the day's length: it's what the
-                // day was, where the list below is what the day contained.
                 summary
 
-                if meetings.count <= Self.meetingsShownInFull || meetingsExpanded {
+                if meetingsExpanded || !startsCollapsed {
                     meetingRows
                 }
-                if meetings.count > Self.meetingsShownInFull {
+                if startsCollapsed || meetingsExpanded {
                     disclosure(
                         meetingsExpanded ? "Show less" : "Show all \(meetings.count)",
                         expanded: !meetingsExpanded
@@ -288,6 +286,17 @@ struct DayDetailPanel: View {
                 }
             }
         }
+    }
+
+    /// Whether the list starts folded away.
+    ///
+    /// A phrase describing the day is enough to know what the day was, so
+    /// where there's one the titles wait behind "Show all" — they're the
+    /// record, wanted when you go looking, not every time you glance. With
+    /// no phrase, "5 meetings · 10½h" isn't a description of anything, so
+    /// the list stays out unless it's long enough to crowd the page.
+    private var startsCollapsed: Bool {
+        meetingGist != nil || meetings.count > Self.meetingsShownInFull
     }
 
     private var summary: some View {
@@ -353,7 +362,7 @@ struct DayDetailPanel: View {
         dictation.stop()
         dictatingField = field
         textBeforeDictation = text.wrappedValue
-        Task {
+        Task { @MainActor in
             await dictation.start()
             // A refused permission or a missing on-device model means the
             // engine never starts, and `isListening` never changes — so

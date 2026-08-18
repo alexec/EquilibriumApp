@@ -17,9 +17,9 @@ struct ContentView: View {
                 calendarAccess: viewModel.calendarAccess,
                 meetingGist: viewModel.meetingGist(for: editor.day),
                 initialFocus: editor.kind,
-                // Nothing to dismiss and nothing to confirm: text is written
-                // as it's typed, and the day's button filling in behind the
-                // panel is the confirmation.
+                // Nothing to dismiss and nothing to confirm: words are
+                // written as they're recognised, and the day's button
+                // filling in behind the panel is the confirmation.
                 onSave: { goals, outcomes, reflection in
                     viewModel.saveDayEntry(
                         day: editor.day,

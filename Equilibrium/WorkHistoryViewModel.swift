@@ -97,6 +97,8 @@ final class WorkHistoryViewModel: ObservableObject {
     /// The `WeekHeaderStats` each week's summary was last generated from,
     /// so an unchanged week doesn't re-invoke the model on every refresh.
     private var lastWeekHeaderStats: [String: WeeklyInsightGenerator.WeekHeaderStats] = [:]
+    /// The meetings each day's gist was generated from, same idea.
+    private var lastGistMeetings: [String: String] = [:]
 
     private let dayKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -302,6 +304,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // Meeting data just landed, which affects what the week summaries
         // describe — refresh those that changed.
         refreshWeekHeaderSummaries()
+        refreshMeetingGist()
     }
 
     /// Drag-clamp bounds for a meeting: the workday when one exists,
@@ -576,19 +579,27 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshMeetingGist()
     }
 
-    /// Asks the on-device model for a phrase describing the panel's day, if
-    /// it hasn't already got one. Keyed by day and generated once: the
-    /// meetings for a past day don't change, and the panel is rebuilt every
-    /// time you click a different column.
+    /// Asks the on-device model for a phrase describing the panel's day.
+    ///
+    /// Tracked against the meetings it was generated from rather than
+    /// generated once per day: choosing a different calendar, editing an
+    /// event, or today simply gaining another meeting all change the list,
+    /// and a phrase describing meetings that are no longer shown is worse
+    /// than none. Unchanged lists don't ask the model again.
     func refreshMeetingGist() {
         guard MeetingSummaryGenerator.isAvailable else { return }
         guard #available(macOS 26.0, *) else { return }
 
         let day = dayEditor.day
         let key = dayKey(for: day)
-        guard meetingGists[key] == nil else { return }
         let meetings = meetings(for: day)
         guard meetings.count > 1 else { return }
+
+        let signature = meetings
+            .map { "\($0.id)|\($0.start.timeIntervalSinceReferenceDate)|\($0.end.timeIntervalSinceReferenceDate)|\($0.title)" }
+            .joined(separator: "\n")
+        guard lastGistMeetings[key] != signature else { return }
+        lastGistMeetings[key] = signature
 
         Task {
             let gist = await MeetingSummaryGenerator.generateGist(for: meetings)

@@ -68,12 +68,32 @@ enum MeetingSummaryGenerator {
             // it's removed here rather than left to the model.
             let text = response.content
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-                .trimmingCharacters(in: CharacterSet(charactersIn: ".;,"))
-            return text.isEmpty ? nil : text
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".;,:—- "))
+            guard !text.isEmpty, !statesACount(text) else { return nil }
+            return text
         } catch {
             return nil
         }
     }
+    /// Whether a gist counts something, which it is asked not to do: a
+    /// number here sits directly under `countAndHours` and contradicts it
+    /// when the model miscounts, as it did with "Three interviews" for a
+    /// day holding one interview twice over.
+    ///
+    /// Digits only. Spelled-out counts are left to the prompt because the
+    /// words that would catch them also appear in things worth keeping —
+    /// "one-to-ones" is not a count. Times like "1:1" survive for the same
+    /// reason: a digit beside a colon is a name, not a tally.
+    static func statesACount(_ text: String) -> Bool {
+        let digits = text.enumerated().filter { $0.element.isNumber }
+        let characters = Array(text)
+        return digits.contains { index, _ in
+            let before = index > 0 ? characters[index - 1] : " "
+            let after = index + 1 < characters.count ? characters[index + 1] : " "
+            return before != ":" && after != ":"
+        }
+    }
+
     #else
     /// Framework isn't in this SDK at all; the count and hours stand alone.
     static func generateGist(for meetings: [DayMeeting]) async -> String? {
