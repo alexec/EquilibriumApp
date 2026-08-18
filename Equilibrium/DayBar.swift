@@ -402,8 +402,11 @@ private struct WorkdayBlockView: View {
     /// a long one still has a middle to grab.
     private static let minHandleHeight: CGFloat = 6
     private static let maxHandleHeight: CGFloat = 14
-    /// How far outside the capsule still counts as grabbing it.
-    private static let grabPadding: CGFloat = 4
+    /// How far outside the capsule still counts as grabbing it. Generous
+    /// vertically because there's nothing above or below to compete with —
+    /// and because a press a couple of points past the end of a pill is
+    /// plainly aimed at that pill.
+    private static let grabPadding: CGFloat = 8
     /// A drag can't shrink a day below this.
     private static let minimumDuration: TimeInterval = 15 * 60
     /// Below this a press is a click, not a drag, and changes nothing.
@@ -470,7 +473,12 @@ private struct WorkdayBlockView: View {
                     .offset(y: topOffset + workedHeight)
             }
         }
-        .frame(width: barWidth + 20, height: chartHeight, alignment: .top)
+        // Fills the width `DayBar` gives it rather than claiming a fixed
+        // margin of its own: at 20pt either side the grab area overhung the
+        // column into its neighbours, where a press near the boundary could
+        // start a drag on the wrong day.
+        .frame(maxWidth: .infinity, alignment: .center)
+        .frame(height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
         #if os(macOS)
         .background(WindowDragBlocker())
@@ -564,7 +572,12 @@ private struct WorkdayBlockView: View {
             let duration = span.end.timeIntervalSince(span.start)
             let earliest = bounds.lowerBound
             let latest = bounds.upperBound.addingTimeInterval(-duration)
-            let clamped = min(max(start, earliest), max(latest, earliest))
+            // A day longer than the drawn scale has nowhere inside it to sit.
+            // Shrinking it to fit would throw away hours nobody asked to
+            // lose, and sliding it anyway pushed its end past midnight, so
+            // moving one simply doesn't apply — resize it first.
+            guard latest >= earliest else { return (span.start, span.end) }
+            let clamped = min(max(start, earliest), latest)
             return (clamped, clamped.addingTimeInterval(duration))
         case .resizeTop:
             // The far end is clamped too, not just the one being dragged:
