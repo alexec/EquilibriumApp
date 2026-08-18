@@ -25,8 +25,22 @@ final class Dictation: ObservableObject {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
+    /// A start is in progress. `isListening` doesn't turn true until the
+    /// engine is running, and the permission check before that suspends —
+    /// long enough for a second press to walk in behind the first and
+    /// install a second tap on the same input.
+    private var isStarting = false
+    /// Bumped by every start and every stop, so a start that was suspended
+    /// when the microphone was turned off can tell that it's been overtaken
+    /// and leave the engine alone.
+    private var generation = 0
+
     func start() async {
-        guard !isListening else { return }
+        guard !isListening, !isStarting else { return }
+        isStarting = true
+        generation += 1
+        let thisStart = generation
+        defer { isStarting = false }
         transcript = ""
         unavailableReason = nil
 
@@ -51,6 +65,10 @@ final class Dictation: ObservableObject {
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = true
         self.request = request
+
+        // Asking for permission suspends, and a press of stop while that
+        // was happening means this run is no longer wanted.
+        guard thisStart == generation else { return }
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -88,6 +106,7 @@ final class Dictation: ObservableObject {
     }
 
     func stop() {
+        generation += 1
         guard isListening || engine.isRunning else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
