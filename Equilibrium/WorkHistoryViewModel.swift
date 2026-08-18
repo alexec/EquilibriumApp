@@ -634,7 +634,7 @@ final class WorkHistoryViewModel: ObservableObject {
         guard lastGistMeetings[key] != signature else { return }
         lastGistMeetings[key] = signature
 
-        Task {
+        Task { @MainActor in
             let gist = await MeetingSummaryGenerator.generateGist(for: meetings)
             // The day's meetings can change again while the model is
             // thinking, in which case a second generation is already under

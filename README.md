@@ -35,7 +35,7 @@ focus and to relax, and to get the right work-life balance.
 - Days can be manually edited, overridden, or deleted, with an optional
   30-minute-increment break duration subtracted from the displayed hours.
 - Every day carries a morning intention (the sun above its bar) and an
-  end-of-day check-in (the moon below it), filled in once recorded.  Click
+  end-of-day check-in (the moon below it), filled in once spoken.  Click
   either — on any day, not just today — to bring that day up in the panel
   beside the chart, alongside its meetings.
 - A day with more than four meetings arrives summarised — "5 meetings ·
@@ -128,4 +128,26 @@ generate the Xcode project from `project.yml`:
 ```bash
 xcodegen generate
 xcodebuild -project Equilibrium.xcodeproj -scheme Equilibrium -configuration Release build
+```
+
+### Signing, and why the permission prompts keep coming back
+
+Out of the box the build is signed ad-hoc, which is fine for CI and for
+anyone building a fork.  It does mean macOS sees each rebuild as a
+different app: a permission grant is recorded against an app's code
+signature, and an ad-hoc signature is only its code hash.  So every
+rebuild asks for calendar access again.
+
+To stop that while developing, sign with your own team — set these before
+`xcodegen generate` and the settings are baked into the project:
+
+```bash
+export EQUILIBRIUM_DEVELOPMENT_TEAM=YOURTEAMID
+export EQUILIBRIUM_CODE_SIGN_IDENTITY="Apple Development"
+```
+
+Your team ID is the `OU` field of your development certificate:
+
+```bash
+security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
 ```

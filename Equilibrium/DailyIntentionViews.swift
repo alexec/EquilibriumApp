@@ -359,7 +359,11 @@ struct DayDetailPanel: View {
     /// Starts the microphone on a field, or stops it if that field is
     /// already the one being dictated into. Only one runs at a time.
     private func toggleDictation(for field: Field, text: Binding<String>) {
-        guard dictatingField != field else {
+        // Asks the engine, not the intent: dictation stopping on its own —
+        // a long silence — leaves the field still claimed, and testing that
+        // instead would make the next press merely release it, so speaking
+        // again took two.
+        guard !isListening(field) else {
             dictation.stop()
             dictatingField = nil
             return
