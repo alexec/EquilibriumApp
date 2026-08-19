@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 import Speech
 
 /// Speech-to-text for the day panel, which takes intentions and check-ins
@@ -241,22 +242,35 @@ final class Dictation: ObservableObject {
 /// The tap is installed once and runs on an audio thread, while the request
 /// underneath it is replaced at every segment boundary — so the two can't
 /// simply be captured together, and the tap can't reach through the
-/// main-actor-isolated `Dictation` to find the current one. A lock hands it
-/// whichever request is open, and hands it nothing once dictation has
+/// main-actor-isolated `Dictation` to find the current one. This hands the
+/// tap whichever request is open, and hands it nothing once dictation has
 /// stopped.
+///
+/// The caller is a real-time audio thread, which shapes both halves. The
+/// lock is `os_unfair_lock`, whose owner inherits the waiter's priority —
+/// a plain mutex has no such thing, so the audio thread could be left
+/// waiting on a main thread the scheduler had put down. And it's held only
+/// long enough to read the reference: handing the buffer over is the
+/// expensive part and happens outside, so neither side can be stalled by
+/// the other doing real work.
+///
+/// Buffers are never dropped to avoid waiting. What arrives here is speech,
+/// and a buffer discarded at a segment boundary is a word missing from the
+/// seam — the failure this whole file exists to stop.
 private final class AudioSink: @unchecked Sendable {
-    private let lock = NSLock()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
+    private let current = OSAllocatedUnfairLock<SFSpeechAudioBufferRecognitionRequest?>(uncheckedState: nil)
 
     func use(_ request: SFSpeechAudioBufferRecognitionRequest?) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.request = request
+        current.withLockUnchecked { $0 = request }
     }
 
     func append(_ buffer: AVAudioPCMBuffer) {
-        lock.lock()
-        defer { lock.unlock() }
+        // Appending outside the lock leaves a hair's-breadth window where a
+        // buffer already in flight reaches a request that `stop()` has just
+        // ended. An ended request ignores what arrives after it, so that
+        // costs a buffer nobody was waiting on, and it buys a lock the
+        // audio thread can never be caught behind.
+        let request = current.withLockUnchecked { $0 }
         request?.append(buffer)
     }
 }
