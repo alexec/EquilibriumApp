@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// One thing you say out loud: a titled field filled by dictation rather
-/// than typing.
+/// One intention or check-in field: type or dictate, whichever suits the
+/// moment.
 ///
-/// It has two shapes. While there's nothing to show, the microphone is the
-/// field — centred, with the question underneath, so it reads as "press
-/// this and answer that". Once there are words, they become the content and
-/// the microphone retreats to the top right, where it's available for
-/// adding more without competing with what's already been said.
+/// A multiline editor is always available; the microphone beside the title
+/// fills it by voice. While empty, the prompt sits in the field as a
+/// placeholder — centred-feeling copy that disappears once there are words.
 ///
 /// The component owns none of the speech machinery. Only one field can be
 /// listening at a time, which is a decision for whoever is showing them, so
@@ -15,24 +13,27 @@ import SwiftUI
 /// `DayDetailPanel`).
 struct DictationField: View {
     let title: String
-    /// What the person is being asked to say — shown under the microphone
-    /// while the field is empty, which is when they need to know it.
+    /// What the person is being asked to say — shown as a placeholder while
+    /// the field is empty.
     let prompt: String
     @Binding var text: String
     let isListening: Bool
     let onToggle: () -> Void
+    /// Called when the person clicks into the editor so dictation can stop
+    /// before typed edits race with the transcript stream.
+    let onBeginEditing: () -> Void
     /// Clearing has to go through the panel rather than just emptying the
     /// binding: if this field is mid-dictation, the next recognised phrase
     /// would be appended to the text that was there when it started and put
     /// it all straight back.
     let onClear: () -> Void
 
-    /// Height of the text area once there's something in it, in lines, so
-    /// the panel doesn't jump as words arrive.
+    /// Height of the text area, in lines, so the panel doesn't jump as words
+    /// arrive.
     var minimumLines: Int = 2
 
-    /// The centred prompt only makes sense while the field has nothing to
-    /// show; from the first word on, the words are the point.
+    @FocusState private var isFocused: Bool
+
     private var isEmpty: Bool {
         text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -49,36 +50,34 @@ struct DictationField: View {
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .accessibilityLabel("Clear \(title.lowercased())")
-                    microphone(size: 12)
+                }
+                microphone(size: 12)
+            }
+
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $text)
+                    .font(.system(size: 12))
+                    .focused($isFocused)
+                    .scrollContentBackground(.hidden)
+                    .frame(maxWidth: .infinity, minHeight: CGFloat(minimumLines) * 15, alignment: .topLeading)
+                    .padding(4)
+                    .background(fieldBackground)
+                    .onChange(of: isFocused) { focused in
+                        if focused { onBeginEditing() }
+                    }
+
+                if isEmpty {
+                    Text(isListening ? "Listening…" : prompt)
+                        .font(.system(size: 11))
+                        .foregroundColor(isListening ? .red : .secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
                 }
             }
-
-            if isEmpty {
-                emptyState
-            } else {
-                Text(text)
-                    .font(.system(size: 12))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, minHeight: CGFloat(minimumLines) * 15, alignment: .topLeading)
-                    .padding(8)
-                    .background(fieldBackground)
-                    .textSelection(.enabled)
-            }
         }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 5) {
-            microphone(size: 18)
-            Text(isListening ? "Listening…" : prompt)
-                .font(.system(size: 11))
-                .foregroundColor(isListening ? .red : .secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(fieldBackground)
     }
 
     private func microphone(size: CGFloat) -> some View {

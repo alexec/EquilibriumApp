@@ -2,8 +2,8 @@ import AVFoundation
 import Foundation
 import Speech
 
-/// Speech-to-text for the day panel, which takes intentions and check-ins
-/// by voice rather than by typing.
+/// Speech-to-text for the day panel, where intentions and check-ins can be
+/// spoken as well as typed.
 ///
 /// Recognition is pinned on-device (`requiresOnDeviceRecognition`). That's
 /// not a preference: the app ships no network entitlement and tells people
