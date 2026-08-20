@@ -14,6 +14,8 @@ struct MailAccountPickerView: View {
     let accounts: [SelectableMailAccount]
     /// The chosen account, or `nil` when the unified inbox is read.
     let selection: String?
+    /// Which mailbox the last fetch actually read.
+    let scope: MailScope
     let onChange: (String?) -> Void
 
     private static let allTag = ""
@@ -51,6 +53,16 @@ struct MailAccountPickerView: View {
 
                 if selectionIsMissing {
                     Text("That account is no longer in Mail — every account is being read.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if scope == .fellBackToAllAccounts {
+                    // The account is still in Mail but its inbox wouldn't
+                    // open — an inbox not called INBOX, or Mail mid-sync.
+                    // Said out loud because the consequence is more mail on
+                    // screen than was asked for, and the picker above is
+                    // otherwise sitting there claiming the opposite.
+                    Text("Mail wouldn't open that account's inbox — every account is being read.")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
