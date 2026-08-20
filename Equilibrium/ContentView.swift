@@ -47,6 +47,7 @@ struct ContentView: View {
                 onCalendarSelectionChange: { viewModel.updateCalendarSelection($0) },
                 mailAccounts: viewModel.mailAccounts,
                 mailSelection: viewModel.mailSelection,
+                mailScope: viewModel.mailScope,
                 onMailSelectionChange: { viewModel.updateMailSelection($0) }
             ) { updated in
                 viewModel.updatePreferences(updated)

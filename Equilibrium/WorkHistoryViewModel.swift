@@ -118,6 +118,11 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Mail accounts for the picker, and the chosen one.
     @Published var mailAccounts: [SelectableMailAccount] = []
     @Published var mailSelection: String?
+    /// Which mailbox the messages on screen actually came from. Published
+    /// so the picker can own up to a fallback: an account that can't be
+    /// opened means the column is showing every account's mail, and the
+    /// only thing worse than that is not saying so.
+    @Published private(set) var mailScope: MailScope = .allAccounts
     /// Which week the chart shows, counted from the current one: 0 is this
     /// week, -1 last week. The chart is deliberately one week at a time —
     /// the week is the unit everything else here works in (the target, the
@@ -934,6 +939,22 @@ final class WorkHistoryViewModel: ObservableObject {
             let result = await MailStore.shared.fetch()
             guard account == mailSelection else { continue }
 
+            // Asked for on every pass, not only a successful one, and not
+            // when preferences opens: the picker is behind a sheet that has
+            // to draw immediately, and a trip to Mail takes seconds.
+            // Reading the accounts even after a failed fetch is what stops
+            // the picker being empty — "No mail accounts available" used to
+            // be what you got for opening preferences before the first
+            // inbox had arrived, which is precisely when you would go
+            // looking for the setting.
+            //
+            // An empty answer never overwrites a good list. Mail returns
+            // nothing here when it is mid-launch or busy, and blanking the
+            // list would take the picker off screen under the hand of
+            // whoever was using it.
+            let accounts = await MailStore.shared.accounts()
+            if !accounts.isEmpty { mailAccounts = accounts }
+
             switch result {
             case .failed(let state):
                 mailAccess = state
@@ -943,10 +964,7 @@ final class WorkHistoryViewModel: ObservableObject {
                 // inbox flicker away every time Mail was mid-sync.
             case .fetched(let fetch):
                 mailAccess = .granted
-                // Read alongside the inbox rather than when preferences opens:
-                // the picker is behind a popover that has to draw immediately,
-                // and a trip to Mail takes seconds.
-                mailAccounts = await MailStore.shared.accounts()
+                mailScope = fetch.scope
                 mailMessages = fetch.messages
                 myAddresses = fetch.myAddresses
                 await refreshDeferrals()
