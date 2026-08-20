@@ -196,7 +196,8 @@ struct DayDetailPanel: View {
         // Recognition stopping on its own — a long silence, an error — needs
         // no handling: `isListening(_:)` consults the engine, so every
         // microphone returns to its idle state on its own. Clearing
-        // `dictatingField` from here is what raced the switch between fields.
+        // `dictatingField` from here is what raced the switch between fields,
+        // and would drop the tail of the last sentence besides.
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
         .frame(width: Self.width)
@@ -391,6 +392,11 @@ struct DayDetailPanel: View {
                             Image(systemName: "video.fill")
                                 .font(.system(size: 11))
                                 .foregroundStyle(Color.accentColor)
+                                // The camera is small because it sits beside
+                                // the title rather than competing with it;
+                                // what you aim at shouldn't be that small, so
+                                // the padding is inside the shape being hit.
+                                .padding(4)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -413,6 +419,13 @@ struct DayDetailPanel: View {
 
     /// Starts the microphone on a field, or stops it if that field is
     /// already the one being dictated into. Only one runs at a time.
+    ///
+    /// Stopping leaves the field claimed rather than releasing it. The last
+    /// words spoken are still being transcribed when the microphone goes
+    /// quiet (see `Dictation.stop()`), and they arrive with nowhere to go
+    /// if the claim has already been dropped — the sentence would lose its
+    /// ending. Nothing else can be dictating in the meantime, and the
+    /// microphone still reads as idle, because that asks the engine.
     private func toggleDictation(for field: Field, text: Binding<String>) {
         // Asks the engine, not the intent: dictation stopping on its own —
         // a long silence — leaves the field still claimed, and testing that
@@ -420,12 +433,9 @@ struct DayDetailPanel: View {
         // again took two.
         guard !isListening(field) else {
             dictation.stop()
-            dictatingField = nil
             return
         }
         dictation.stop()
-        dictatingField = nil
-        let base = text.wrappedValue
         Task { @MainActor in
             await dictation.start()
             // Claimed only once the engine is actually running. Setting it
@@ -433,9 +443,12 @@ struct DayDetailPanel: View {
             // and the observer reacting to it could clear the field after
             // this had already pointed at the new one — leaving dictation
             // running with nowhere to put the words. A refused permission
-            // lands here too, and simply leaves no field claimed.
+            // lands here too, and simply leaves whatever was claimed before.
             guard dictation.isListening else { return }
-            textBeforeDictation = base
+            // Read now rather than at the press: the field may have gained
+            // the tail of the previous run in between, and starting from
+            // what it held then would talk over it.
+            textBeforeDictation = text.wrappedValue
             dictatingField = field
         }
     }
