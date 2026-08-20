@@ -29,6 +29,8 @@ struct PreferencesView: View {
     /// read yet, or automation was declined.
     let mailAccounts: [SelectableMailAccount]
     let mailSelection: String?
+    /// Which mailbox the last inbox fetch actually read.
+    let mailScope: MailScope
     let onMailSelectionChange: (String?) -> Void
 
     @State private var freeText: String
@@ -52,6 +54,7 @@ struct PreferencesView: View {
         onCalendarSelectionChange: @escaping (String?) -> Void,
         mailAccounts: [SelectableMailAccount],
         mailSelection: String?,
+        mailScope: MailScope,
         onMailSelectionChange: @escaping (String?) -> Void,
         onSave: @escaping (WorkPreferences) -> Void
     ) {
@@ -62,6 +65,7 @@ struct PreferencesView: View {
         self.onCalendarSelectionChange = onCalendarSelectionChange
         self.mailAccounts = mailAccounts
         self.mailSelection = mailSelection
+        self.mailScope = mailScope
         self.onMailSelectionChange = onMailSelectionChange
         self.modelUnavailability = OnDeviceModel.unavailability
         _draft = State(initialValue: current)
@@ -93,6 +97,7 @@ struct PreferencesView: View {
             MailAccountPickerView(
                 accounts: mailAccounts,
                 selection: mailSelection,
+                scope: mailScope,
                 onChange: onMailSelectionChange
             )
 
