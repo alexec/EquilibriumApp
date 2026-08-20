@@ -31,17 +31,18 @@ struct DailyBarChartView: View {
     let canShowNextWeek: Bool
     let onShowPreviousWeek: () -> Void
     let onShowNextWeek: () -> Void
-    /// That day's intention / check-in, or nil if nothing's recorded — this
-    /// is what fills in the buttons above and below each bar.
-    let intention: (Date) -> DailyIntention?
-    /// The day the side panel is showing, so its column's button can show
-    /// as selected.
+    /// The day the side panel is showing, so its column can be banded as
+    /// the selected one.
     let selection: DayEditorSelection
-    let onSelectDay: (Date, DailyPromptKind) -> Void
+    /// Open a day in the side panel. Which of the day's two sections gets
+    /// focus is no longer the chart's business — a column says which day,
+    /// and nothing about which half of it.
+    let onSelectDay: (Date) -> Void
     let onMeetingChange: (Date, UUID, Date, Date) -> Void
     let onShiftChange: (Date, UUID, Date, Date) -> Void
     let onShiftAdd: (Date, Date, Date) -> Void
     let onShiftRemove: (Date, UUID) -> Void
+    let onMeetingRemove: (Date, UUID) -> Void
     let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
@@ -53,7 +54,8 @@ struct DailyBarChartView: View {
     /// Weekday and date, stacked above each column — two points taller
     /// than the text alone needs, for the capsule drawn round today's date.
     private static let labelHeight: CGFloat = 29
-    /// The day's total, under the check-in moon.
+    /// The day's total — or, on a day with no hours on it yet, the hours
+    /// being recommended for it.
     private static let totalHeight: CGFloat = 13
     /// The hover-revealed delete / reset row under each column.
     private static let columnControlsHeight: CGFloat = 12
@@ -63,26 +65,20 @@ struct DailyBarChartView: View {
     private static let headerGap: CGFloat = 4
 
     /// Everything in a column that isn't the bar: the labels above and
-    /// below, both prompt buttons with their padding, the controls row, and
-    /// the five gaps between the six of them. Counted in one place because
-    /// the bar gets whatever is left, and an undercount here makes every
-    /// column taller than the space it was given.
+    /// below, the controls row, and the three gaps between the four of
+    /// them. Counted in one place because the bar gets whatever is left,
+    /// and an undercount here makes every column taller than the space it
+    /// was given.
     private static var columnOverhead: CGFloat {
         labelHeight + totalHeight + columnControlsHeight
-            + (promptRowHeight + columnSpacing - 2) * 2
-            + columnStackSpacing * 5
+            + columnStackSpacing * 3
     }
 
     /// How far below the top of a column its bar begins — the y-axis labels
     /// drop by the same amount so they keep pointing at the right heights.
     private static var barTopInset: CGFloat {
         labelHeight + columnStackSpacing
-            + promptRowHeight + (columnSpacing - 2)
-            + columnStackSpacing
     }
-    // The intention button sits above each bar and the check-in below it,
-    // one row of this height each, taken off the bars' own height.
-    private static let promptRowHeight: CGFloat = 16
     // Fits the week navigation row plus the stats sentence below it, which
     // can still wrap to two lines at the narrowest window width.
     private static let weekHeaderHeight: CGFloat = 46
@@ -246,97 +242,82 @@ struct DailyBarChartView: View {
     private func columnHeader(day: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(day)
 
-        return VStack(spacing: 1) {
-            Text(weekdayLabel(day))
-                .font(.system(size: 11, weight: isToday ? .semibold : .medium))
-                .foregroundColor(isToday ? .primary : .secondary)
-            Text(dateLabel(day))
-                .font(.system(size: 9, weight: isToday ? .semibold : .regular))
-                .foregroundColor(isToday ? .white : .secondary.opacity(0.7))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(isToday ? Color.accentColor : .clear))
+        return Button {
+            onSelectDay(day)
+        } label: {
+            VStack(spacing: 1) {
+                Text(weekdayLabel(day))
+                    .font(.system(size: 11, weight: isToday ? .semibold : .medium))
+                    .foregroundColor(isToday ? .primary : .secondary)
+                Text(dateLabel(day))
+                    .font(.system(size: 9, weight: isToday ? .semibold : .regular))
+                    .foregroundColor(isToday ? .white : .secondary.opacity(0.7))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(isToday ? Color.accentColor : .clear))
+            }
+            .frame(height: Self.labelHeight, alignment: .top)
+            .contentShape(Rectangle())
         }
-        .frame(height: Self.labelHeight, alignment: .top)
+        .buttonStyle(.plain)
+        .help("Open this day")
         // The capsule is colour alone, which VoiceOver doesn't see; the
         // date is read out either way, so this only has to add the word.
+        // As the column's one focusable element it also has to say what
+        // activating it does, which is the job the sun and moon used to do.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             isToday
                 ? "Today, \(Self.accessibilityDayFormatter.string(from: day))"
                 : Self.accessibilityDayFormatter.string(from: day)
         )
+        .accessibilityHint("Opens this day in the side panel")
     }
 
-    /// The day's total, under the check-in moon: the date says which day
-    /// this is, and this says what it came to — the two ends of the column.
+    /// What the day came to, under its bar: the date says which day this
+    /// is, and this says what it amounted to — the two ends of the column.
     ///
-    /// Its line is reserved on days without one so that what sits below it
-    /// keeps a common baseline across the week.
+    /// A day with no hours on it yet answers the same question in advance,
+    /// with the hours being recommended for it ("7h?") or the amount it is
+    /// already over by ("over 2h"). That figure used to float inside the
+    /// bar, level with the first ghost, where it was a second place to look
+    /// for a number the column already had a place for — and where it moved
+    /// up and down with the recommendation instead of holding a line across
+    /// the week.
+    ///
+    /// `recommendedHours` is nil at the weekend and on any day already
+    /// worked, so the two cases can't both be true; the line is reserved on
+    /// days with neither so what sits below it keeps a common baseline.
     private func columnTotal(day: Date, span: WorkdaySpan?) -> some View {
-        Group {
-            if let hours = span?.roundedUpHours, !(span?.shifts.isEmpty ?? true) {
-                Text("\(hours)h")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
+        let worked = (span?.shifts.isEmpty ?? true) ? nil : span?.roundedUpHours
+        let recommended = worked == nil ? recommendedHours(day) : nil
+        let isOverBudget = (recommended ?? 0) < 0
+
+        return Group {
+            if let worked {
+                Text("\(worked)h")
+                    .foregroundColor(DayFire.intensity(hours: worked, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
+            } else if let recommended {
+                Text(recommendationLabel(recommended))
+                    .foregroundColor(isOverBudget ? .red : .secondary.opacity(0.6))
             } else {
                 Text(" ")
-                    .font(.system(size: 10, weight: .semibold))
             }
         }
+        .font(.system(size: 10, weight: .semibold))
+        .fixedSize()
         .frame(height: Self.totalHeight)
     }
 
-    /// A day's intention (above its bar) or check-in (below it): a sun for
-    /// the morning and a moon for the evening, filled once something's been
-    /// written and hollow while it hasn't. Clicking opens that day in the
-    /// side panel — including days long past, which is the point of putting
-    /// these on every column rather than only on today.
-    @ViewBuilder
-    private func promptButton(day: Date, kind: DailyPromptKind) -> some View {
-        let entry = intention(day)
-        let isFilled = kind == .intention ? (entry?.hasIntention ?? false) : (entry?.hasCheckIn ?? false)
-        let isSelected = selection == DayEditorSelection(day: Calendar.current.startOfDay(for: day), kind: kind)
-        // A day that hasn't happened has nothing to check in about; its
-        // intention is still worth setting in advance, so only this half
-        // disappears — as an empty slot, so the bars stay aligned.
-        let isAvailable = kind == .intention || day <= Calendar.current.startOfDay(for: Date())
-
-        if isAvailable {
-            Button {
-                onSelectDay(day, kind)
-            } label: {
-                Image(systemName: symbolName(kind: kind, filled: isFilled))
-                    .font(.system(size: 10, weight: .medium))
-                    // Filled in the text colour rather than the accent:
-                    // the accent now means "this is the day you're looking
-                    // at" — the capsule on today and the band behind the
-                    // selected column — and a sun wearing it too would be
-                    // a third meaning for the same colour.
-                    .foregroundColor(isFilled ? .primary : .secondary.opacity(0.4))
-                    .frame(width: Self.promptRowHeight, height: Self.promptRowHeight)
-                    .background(
-                        Circle()
-                            .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
-                    )
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .help(helpText(kind: kind, filled: isFilled))
-            // Pointer users have the column under the cursor for context;
-            // VoiceOver has nothing, so the label names the day as well as
-            // what the button does.
-            .accessibilityLabel("\(helpText(kind: kind, filled: isFilled)), \(Self.accessibilityDayFormatter.string(from: day))")
-        } else {
-            Color.clear.frame(height: Self.promptRowHeight)
+    /// The recommendation as it's written under a bar: the hours the day is
+    /// being offered, or — once the week is spent — how far over it already
+    /// is. The question mark is what keeps "7h?" from being read as a total
+    /// the day has actually reached.
+    private func recommendationLabel(_ recommendedHours: Double) -> String {
+        if recommendedHours < 0 {
+            return "over \(Int((-recommendedHours).rounded(.up)))h"
         }
-    }
-
-    private func symbolName(kind: DailyPromptKind, filled: Bool) -> String {
-        switch kind {
-        case .intention: return filled ? "sun.max.fill" : "sun.max"
-        case .checkIn: return filled ? "moon.fill" : "moon"
-        }
+        return "\(Int(recommendedHours.rounded(.up)))h?"
     }
 
     private static let accessibilityDayFormatter: DateFormatter = {
@@ -344,13 +325,6 @@ struct DailyBarChartView: View {
         formatter.dateFormat = "EEEE d MMMM"
         return formatter
     }()
-
-    private func helpText(kind: DailyPromptKind, filled: Bool) -> String {
-        switch kind {
-        case .intention: return filled ? "Edit this day's intention" : "Set an intention for this day"
-        case .checkIn: return filled ? "Edit this day's check-in" : "Check in on this day"
-        }
-    }
 
     private func dayColumns(chartHeight: CGFloat) -> some View {
         HStack(alignment: .top, spacing: Self.columnSpacing) {
@@ -360,11 +334,11 @@ struct DailyBarChartView: View {
         }
     }
 
-    /// One day's column. A band behind the whole of it marks the day the
-    /// side panel is showing: the accent ring on a 16pt sun says which
-    /// *prompt* is open but is far too small to say which day, so the panel
-    /// could sit on Thursday's check-in with nothing on the chart admitting
-    /// it. Band for the day, ring for the prompt — two jobs, two marks.
+    /// One day's column, and a click anywhere in it opens that day in the
+    /// side panel. A band behind the whole column marks the day the panel
+    /// is showing — the whole column, because the column *is* the target
+    /// now: there's no longer a sun and a moon to ring, and a day is opened
+    /// by its header, its bar, or the space around them alike.
     private func dayColumn(day: Date, index: Int, chartHeight: CGFloat) -> some View {
         let span = spans[index]
         let isHovering = hoveringDay == day
@@ -373,9 +347,6 @@ struct DailyBarChartView: View {
         return VStack(spacing: Self.columnStackSpacing) {
             columnHeader(day: day)
 
-            promptButton(day: day, kind: .intention)
-                .padding(.bottom, Self.columnSpacing - 2)
-
             DayBar(
                 span: span,
                 day: day,
@@ -383,9 +354,9 @@ struct DailyBarChartView: View {
                 isWeekend: isWeekend(day),
                 barWidth: Self.barWidth,
                 showsWorkdayTrack: true,
-                showsHoursLabel: true,
                 recommendedHours: recommendedHours(day),
                 shiftTemplates: shiftTemplates,
+                onSelect: { onSelectDay(day) },
                 onMeetingChange: { meetingID, newStart, newEnd in
                     onMeetingChange(day, meetingID, newStart, newEnd)
                 },
@@ -397,11 +368,12 @@ struct DailyBarChartView: View {
                 },
                 onShiftRemove: { shiftID in
                     onShiftRemove(day, shiftID)
-                }
+                },
+                onMeetingRemove: { meetingID in
+                    onMeetingRemove(day, meetingID)
+                },
+                onDeleteDay: { onDelete(day) }
             )
-
-            promptButton(day: day, kind: .checkIn)
-                .padding(.top, Self.columnSpacing - 2)
 
             columnTotal(day: day, span: span)
 
@@ -437,6 +409,10 @@ struct DailyBarChartView: View {
                 .fill(Color.accentColor.opacity(isSelected ? 0.1 : 0))
         )
         .contentShape(Rectangle())
+        // The bar has its own gesture and answers a press itself; this
+        // catches the rest of the column — the header, the total, the space
+        // around them — so the whole width of a day opens it.
+        .onTapGesture { onSelectDay(day) }
         .onHover { hovering in
             hoveringDay = hovering ? day : (hoveringDay == day ? nil : hoveringDay)
         }

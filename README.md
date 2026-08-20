@@ -46,10 +46,10 @@ focus and to relax, and to get the right work-life balance.
   leave the evening alone.  A week that's fallen behind reaches into the
   evening by itself; a week already over budget says so instead.
 - Days can be manually edited, overridden, or deleted.
-- Every day carries a morning intention (the sun above its bar) and an
-  end-of-day check-in (the moon below it), filled in once typed or spoken.
-  Click either — on any day, not just today — to bring that day up in the panel
-  beside the chart, alongside its meetings.
+- Every day carries a morning intention and an end-of-day check-in, typed
+  or spoken. Click a day — its bar, its date, anywhere in its column, on any
+  day and not just today — to bring it up in the panel beside the chart,
+  with both of those and its meetings.
 - A day with more than four meetings arrives summarised — "5 meetings ·
   10½h", plus a short phrase from the on-device model where there is one —
   with the full list one click away, so a heavy diary doesn't crowd out

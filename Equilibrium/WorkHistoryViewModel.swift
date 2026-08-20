@@ -479,6 +479,25 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
     }
 
+    /// Removes one meeting from a day — a meeting that was in the diary but
+    /// didn't happen, or one the calendar holds twice.
+    ///
+    /// Marks the day `meetingsManuallyEdited` for the same reason
+    /// `updateMeeting` does, and more sharply: without it the next calendar
+    /// refresh would put the block straight back and the deletion would
+    /// look broken. `resetMeetings` is the way back.
+    func removeMeeting(for date: Date, meetingID: UUID) {
+        let key = dayKey(for: date)
+        guard var span = spansByDay[key] else { return }
+        guard span.meetings.contains(where: { $0.id == meetingID }) else { return }
+
+        span.meetings.removeAll { $0.id == meetingID }
+        span.meetingsManuallyEdited = true
+        spansByDay[key] = span
+        store.save(spansByDay)
+        refreshWeekHeaderSummaries()
+    }
+
     /// Clears manual meeting edits for a day and immediately re-fetches
     /// from the calendar, reverting to calendar-derived meeting blocks.
     func resetMeetings(for date: Date) {
@@ -736,6 +755,15 @@ final class WorkHistoryViewModel: ObservableObject {
     }
 
     /// Points the panel at `day`, focused on one of its two sections.
+    /// Open a day in the panel without saying which of its two halves is
+    /// wanted. The chart asks this way: a column names a day, and with the
+    /// sun and moon gone there's nothing in it that names a section — so
+    /// whichever the panel was focused on stays focused as you move along
+    /// the week.
+    func selectDay(_ day: Date) {
+        selectDay(day, kind: dayEditor.kind)
+    }
+
     func selectDay(_ day: Date, kind: DailyPromptKind) {
         dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
         refreshMeetingGist()

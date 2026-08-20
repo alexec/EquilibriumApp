@@ -55,11 +55,15 @@ struct DayBar: View {
     let isWeekend: Bool
     let barWidth: CGFloat
     let showsWorkdayTrack: Bool
-    let showsHoursLabel: Bool
     let recommendedHours: Double?
     /// The configured shift slots (from `WorkPreferences`) the ghosts are
     /// drawn from.
     let shiftTemplates: [ShiftTemplate]
+    /// Called when a press on the bar turns out to have been a plain click
+    /// — on a shift, on a meeting, or on the bare track — which is how a
+    /// day is opened in the side panel. A click on a ghost is not one of
+    /// these: that outline is an offer, and accepting it is what it's for.
+    var onSelect: () -> Void = {}
     /// Called with a meeting's id and its new (start, end) once a drag
     /// (resize-top, resize-bottom, or move) ends.
     var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
@@ -68,19 +72,17 @@ struct DayBar: View {
     var onShiftChange: (UUID, Date, Date) -> Void = { _, _, _ in }
     /// Called when a ghost is clicked or a new shift drawn from scratch.
     var onShiftAdd: (Date, Date) -> Void = { _, _ in }
-    /// Called when a shift is ⌥-clicked.
+    /// Called when a shift is ⌥-clicked, or deleted from its menu.
     var onShiftRemove: (UUID) -> Void = { _ in }
+    /// Called when a meeting is deleted from its menu.
+    var onMeetingRemove: (UUID) -> Void = { _ in }
+    /// Called when the whole day's hours are deleted from a menu — the same
+    /// thing the hover trash under the column does.
+    var onDeleteDay: () -> Void = {}
 
     private var calendar: Calendar { .current }
 
     private var shifts: [WorkShift] { span?.shifts ?? [] }
-
-    private func recommendationLabel(_ recommendedHours: Double) -> String {
-        if recommendedHours < 0 {
-            return "over \(Int((-recommendedHours).rounded(.up)))h"
-        }
-        return "\(Int(recommendedHours.rounded(.up)))h?"
-    }
 
     /// Whether to show the recommendation instead of the plain shift
     /// template: only when there's no real work on this day yet.
@@ -139,22 +141,14 @@ struct DayBar: View {
     }
 
     var body: some View {
+        // Still asked, though it's no longer drawn here: a day already over
+        // budget is offered nothing, and the chart says why under the bar.
         let isOverBudget = showsRecommendation && (recommendedHours ?? 0) < 0
-        let labelHour = ghosts.first?.startHour ?? shiftTemplates.first?.startHour ?? ChartScale.startHour
-        let labelTop = CGFloat(ChartScale.fraction(of: labelHour)) * chartHeight
 
         ZStack(alignment: .top) {
             Capsule()
                 .fill(Color.gray.opacity(isWeekend ? 0.05 : 0.1))
                 .frame(width: barWidth, height: chartHeight)
-
-            if showsWorkdayTrack && !isWeekend, showsRecommendation, let recommendedHours, showsHoursLabel {
-                Text(recommendationLabel(recommendedHours))
-                    .font(.system(size: 9, weight: isOverBudget ? .semibold : .regular))
-                    .foregroundColor(isOverBudget ? .red : .secondary.opacity(0.6))
-                    .fixedSize()
-                    .offset(y: labelTop - 13)
-            }
 
             ShiftLayerView(
                 shifts: shifts,
@@ -168,9 +162,11 @@ struct DayBar: View {
                 // Faint once the day has real work on it: still an offer,
                 // but no longer the thing the column is about.
                 ghostsAreSubdued: !shifts.isEmpty,
+                onSelect: onSelect,
                 onChange: onShiftChange,
                 onAdd: onShiftAdd,
-                onRemove: onShiftRemove
+                onRemove: onShiftRemove,
+                onDeleteDay: onDeleteDay
             )
 
             // Meetings render even on days with no shifts yet (future week
@@ -187,6 +183,8 @@ struct DayBar: View {
                         dayStart: clampStart,
                         dayEnd: clampEnd,
                         color: DayFire.meetingColor(intensity: fireIntensity),
+                        onSelect: onSelect,
+                        onRemove: { onMeetingRemove(meeting.id) },
                         onChange: { newStart, newEnd in
                             onMeetingChange(meeting.id, newStart, newEnd)
                         }
@@ -231,6 +229,8 @@ private struct MeetingBlockView: View {
     let dayStart: Date
     let dayEnd: Date
     let color: Color
+    let onSelect: () -> Void
+    let onRemove: () -> Void
     let onChange: (Date, Date) -> Void
 
     private enum DragMode {
@@ -240,6 +240,11 @@ private struct MeetingBlockView: View {
     @State private var dragMode: DragMode?
     @State private var dragPointsDelta: CGFloat = 0
 
+    /// Below this a press is a click rather than a drag. It used to be
+    /// committed as an edit of unchanged times — which snapped the meeting
+    /// to five minutes and marked the day hand-edited, quietly stopping
+    /// calendar refreshes, all for a stray click. Now it opens the day.
+    private static let tapSlop: CGFloat = 4
     private static let edgeHandleHeight: CGFloat = 6
     private static let minBlockHeight: CGFloat = 6
     /// Meetings at or under this duration skip the middle move handle and
@@ -275,6 +280,17 @@ private struct MeetingBlockView: View {
             Capsule()
                 .fill(color)
                 .frame(width: barWidth, height: height)
+                // From the displayed times rather than the stored ones, so
+                // the number counts up under the pointer while the block is
+                // being dragged instead of jumping on release.
+                .overlay(
+                    CapsuleHoursLabel(
+                        hours: displayedEnd.timeIntervalSince(displayedStart) / 3600.0,
+                        capsuleHeight: height,
+                        width: barWidth,
+                        color: DayFire.meetingLabelColor
+                    )
+                )
 
             if isResizeOnly {
                 let half = height / 2
@@ -290,6 +306,13 @@ private struct MeetingBlockView: View {
             }
         }
         .frame(width: barWidth, height: height, alignment: .top)
+        // On the block rather than on the bar underneath it: a meeting is
+        // drawn on top, so a right-click that lands on one is unambiguously
+        // about that meeting, and the shift layer's own menu never has to
+        // know meetings exist.
+        .contextMenu {
+            Button("Delete Meeting", role: .destructive) { onRemove() }
+        }
         .offset(y: topOffset)
     }
 
@@ -308,6 +331,12 @@ private struct MeetingBlockView: View {
                         dragPointsDelta = value.translation.height
                     }
                     .onEnded { value in
+                        guard abs(value.translation.height) >= Self.tapSlop else {
+                            dragMode = nil
+                            dragPointsDelta = 0
+                            onSelect()
+                            return
+                        }
                         let delta = Double(value.translation.height) * secondsPerPoint
                         var finalStart = meeting.start
                         var finalEnd = meeting.end
@@ -352,6 +381,46 @@ private struct MeetingBlockView: View {
     }
 }
 
+/// The hours a capsule stands for, written across it.
+///
+/// Only when there's room: a quarter-hour block is a couple of points tall
+/// on an eighteen-hour scale, and a number drawn on it would be unreadable
+/// and would spill over its neighbours. Short blocks go unlabelled instead
+/// — the capsule is still there to be seen and dragged, and its length is
+/// its own answer at that size.
+///
+/// Sized to the bar rather than to the text, so a label that would be wider
+/// than the column shrinks to fit rather than pushing into the day either
+/// side. Never a hit target: every press in a column belongs to the one
+/// gesture underneath it.
+private struct CapsuleHoursLabel: View {
+    let hours: Double
+    let capsuleHeight: CGFloat
+    let width: CGFloat
+    let color: Color
+
+    /// A 9pt line plus a little air, which is the least that reads as a
+    /// number rather than a smudge.
+    private static let minimumHeight: CGFloat = 13
+
+    var body: some View {
+        if capsuleHeight >= Self.minimumHeight, hours > 0 {
+            Text(HoursFormat.string(hours))
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                // A point inside the capsule rather than flush to it: at
+                // 18pt wide, "1½h" drawn to the full width touched both
+                // rounded ends and spilled onto the track behind. Shrinking
+                // that one label a little is better than a number that
+                // looks like it's falling out of its block.
+                .frame(width: max(width - 2, 1))
+                .allowsHitTesting(false)
+        }
+    }
+}
+
 /// Heat for a "fiery" day — shades of red once you're over the balanced
 /// line (or working a weekend). 0 = calm gray; 1 = full red.
 ///
@@ -386,6 +455,21 @@ enum DayFire {
         let blue = 0.30 - intensity * 0.12
         return Color(red: 1.0, green: green, blue: blue)
     }
+
+    /// The ink a shift capsule's hours are written in. White reads well on
+    /// every shade of the red, but on the calm gray — which is the system
+    /// gray, and so is *lighter* in dark mode than in light — it comes to
+    /// barely 3:1, under the line for a 9pt label. Dark ink is the other
+    /// way round: fine on the gray in both appearances, and muddy on a deep
+    /// red. So the label follows the capsule rather than picking one colour
+    /// and hoping.
+    static func workLabelColor(intensity: Double) -> Color {
+        intensity > 0 ? .white : .black.opacity(0.75)
+    }
+
+    /// Meetings need no such switch: both the calm yellow and the fiery
+    /// coral are light, so dark ink reads on either.
+    static let meetingLabelColor = Color.black.opacity(0.75)
 }
 
 /// The day's shifts and the ghosts of the ones it hasn't got, with one
@@ -407,9 +491,11 @@ private struct ShiftLayerView: View {
     let barWidth: CGFloat
     let isWeekend: Bool
     let ghostsAreSubdued: Bool
+    let onSelect: () -> Void
     let onChange: (UUID, Date, Date) -> Void
     let onAdd: (Date, Date) -> Void
     let onRemove: (UUID) -> Void
+    let onDeleteDay: () -> Void
 
     private enum DragMode {
         case moveWhole, resizeTop, resizeBottom
@@ -481,17 +567,54 @@ private struct ShiftLayerView: View {
 
             ForEach(live) { shift in
                 let (top, bottom) = shiftBounds(shift)
+                let height = max(bottom - top, minimumCapsuleHeight)
                 Capsule()
                     .fill(workColor)
-                    .frame(width: barWidth, height: max(bottom - top, minimumCapsuleHeight))
+                    .frame(width: barWidth, height: height)
+                    // `live`, not `shifts`: a shift being dragged shows the
+                    // length it would have, the same way its capsule shows
+                    // the shape it would have.
+                    .overlay(
+                        CapsuleHoursLabel(
+                            hours: shift.hours,
+                            capsuleHeight: height,
+                            width: barWidth,
+                            color: DayFire.workLabelColor(intensity: fire)
+                        )
+                    )
+                    // On the capsule, closing over its own id. Hung on the
+                    // container instead — asking hover which block the
+                    // pointer was over — it deleted the wrong shift: the
+                    // menu's contents are built when the view updates, not
+                    // when the menu opens, so they can carry a target from
+                    // an earlier position. A menu that deletes something
+                    // other than what was right-clicked is the one failure
+                    // this feature can't have, and binding each menu to the
+                    // block it's drawn on rules it out by construction.
+                    .contextMenu {
+                        Button("Delete Shift", role: .destructive) { onRemove(shift.id) }
+                        Divider()
+                        dayMenuItems
+                    }
                     .offset(y: top)
             }
 
             if let startY = drawStartY, let currentY = drawCurrentY {
                 let top = min(startY, currentY)
+                let height = max(abs(currentY - startY), minimumCapsuleHeight)
                 Capsule()
                     .fill(Self.drawColor)
-                    .frame(width: barWidth, height: max(abs(currentY - startY), minimumCapsuleHeight))
+                    .frame(width: barWidth, height: height)
+                    .overlay(
+                        CapsuleHoursLabel(
+                            hours: abs(Double(currentY - startY)) * secondsPerPoint / 3600.0,
+                            capsuleHeight: height,
+                            width: barWidth,
+                            // The preview is drawn in the same gray a calm
+                            // day is, so it takes the calm day's ink.
+                            color: DayFire.workLabelColor(intensity: 0)
+                        )
+                    )
                     .offset(y: top)
             }
         }
@@ -507,6 +630,7 @@ private struct ShiftLayerView: View {
         #endif
         .gesture(dragGesture)
         .help(helpText)
+        .contextMenu { dayMenuItems }
         #if os(macOS)
         .onContinuousHover { phase in
             switch phase {
@@ -524,13 +648,27 @@ private struct ShiftLayerView: View {
         #endif
     }
 
+    /// The menu for the column itself — bare track, or a ghost. Only the
+    /// day is on offer here, since nothing else was clicked. It's disabled
+    /// rather than absent on a day with no hours: an empty menu is worse
+    /// than a grayed-out one, which at least says the option exists.
+    ///
+    /// A capsule carries its own copy of this, with its own entry above it;
+    /// the innermost menu is the one that opens, so a right-click on a
+    /// block gets the block's.
+    @ViewBuilder
+    private var dayMenuItems: some View {
+        Button("Delete Day's Hours", role: .destructive) { onDeleteDay() }
+            .disabled(shifts.isEmpty)
+    }
+
     private var helpText: String {
         if shifts.isEmpty {
             return ghosts.isEmpty
-                ? "Drag to record a shift"
-                : "Click an outline to add that shift, or drag to draw one"
+                ? "Click to open this day, or drag to record a shift"
+                : "Click an outline to add that shift, drag to draw one, or click the bar to open this day"
         }
-        return "Drag a shift's edge to extend it — reach the next one and they merge. ⌥-click a shift to remove it."
+        return "Click to open this day. Drag a shift's edge to extend it — reach the next one and they merge. Right-click a block to delete it (⌥-click a shift does the same)."
     }
 
     /// The shifts as they should look right now: saved, except for the one
@@ -596,9 +734,10 @@ private struct ShiftLayerView: View {
                     guard let shift = shifts.first(where: { $0.id == id }) else { return }
                     if isTap {
                         // Removing is deliberate: a plain click on a shift
-                        // does nothing, so the block can be aimed at and
-                        // missed without a day's work disappearing.
-                        if isOptionHeld { onRemove(id) }
+                        // opens the day rather than changing it, so the
+                        // block can be aimed at and missed without a day's
+                        // work disappearing.
+                        if isOptionHeld { onRemove(id) } else { onSelect() }
                         return
                     }
                     let (start, end) = times(shift: shift, mode: mode, deltaPoints: value.translation.height)
@@ -616,7 +755,10 @@ private struct ShiftLayerView: View {
                     draw(from: value)
 
                 case .column:
-                    guard !isTap else { return }
+                    guard !isTap else {
+                        onSelect()
+                        return
+                    }
                     draw(from: value)
                 }
             }
