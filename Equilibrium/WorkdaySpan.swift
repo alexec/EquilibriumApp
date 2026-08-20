@@ -127,12 +127,15 @@ struct WorkdaySpan: Codable, Identifiable {
     /// Everything between the start and end of the day that wasn't worked:
     /// the gaps between shifts, plus any break still folded inside one.
     /// This is what the week's caption means by "Nh of breaks a day".
+    /// Summed in seconds and rounded once at the end, not per gap: these
+    /// are real wake and sleep timestamps rather than whole minutes, and
+    /// truncating each gap on its own lost most of a minute per break.
     var breakMinutesUsed: Int {
-        var gaps = 0
+        var gapSeconds: TimeInterval = 0
         for (earlier, later) in zip(shifts, shifts.dropFirst()) {
-            gaps += Int(max(0, later.start.timeIntervalSince(earlier.end)) / 60.0)
+            gapSeconds += max(0, later.start.timeIntervalSince(earlier.end))
         }
-        return gaps + deductedBreakMinutes
+        return Int((gapSeconds / 60.0).rounded()) + deductedBreakMinutes
     }
 
     /// Total minutes across all meetings that fall inside a shift. Meetings

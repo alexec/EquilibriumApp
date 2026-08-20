@@ -54,6 +54,42 @@ struct WorkPreferences: Codable, Equatable {
 
     static let `default` = WorkPreferences()
 
+    /// What the manual editor's controls offer, and what a schedule parsed
+    /// from free text is held to. Kept here rather than in
+    /// `WorkPreferencesForm` because the model is guided, not constrained,
+    /// and can hand back a negative week or a 200-hour one: a value the
+    /// pickers have no option for leaves them blank and unusable, so the
+    /// two paths have to agree on the bounds rather than one of them
+    /// knowing about them.
+    static let weeklyTargetRange: ClosedRange<Double> = 5...80
+    static let dailyHoursRange: ClosedRange<Double> = 0.5...8
+
+    /// Half-hour steps, since that's the resolution `HoursFormat` displays.
+    static let dailyHoursOptions: [Double] = Array(
+        stride(from: dailyHoursRange.lowerBound, through: dailyHoursRange.upperBound, by: 0.5)
+    )
+
+    /// Rounds and clamps everything to what the editor can represent, and
+    /// drops any shift that can't be drawn. Applied to whatever the
+    /// on-device model produces before it becomes settings.
+    ///
+    /// Bad shifts are dropped rather than repaired, since there's no
+    /// telling which of the two hours the model meant; a schedule left with
+    /// none at all falls back to the standard three.
+    func sanitized() -> WorkPreferences {
+        var copy = self
+        copy.weeklyTargetHours = weeklyTargetHours.rounded().clamped(to: Self.weeklyTargetRange)
+        copy.targetMeetingHoursPerDay = targetMeetingHoursPerDay.map(Self.roundedDailyHours)
+        copy.targetFocusHoursPerDay = targetFocusHoursPerDay.map(Self.roundedDailyHours)
+        let usable = shifts.filter { $0.endHour > $0.startHour && $0.startHour >= 0 && $0.endHour <= 24 }
+        copy.shifts = usable.isEmpty ? ShiftTemplate.standard : usable
+        return copy
+    }
+
+    private static func roundedDailyHours(_ hours: Double) -> Double {
+        ((hours * 2).rounded() / 2).clamped(to: dailyHoursRange)
+    }
+
     /// When the day starts: the first shift's start. What the morning
     /// intention reminder is scheduled against.
     var workdayStartHour: Double {

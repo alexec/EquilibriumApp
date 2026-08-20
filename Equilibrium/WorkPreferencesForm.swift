@@ -11,17 +11,13 @@ import SwiftUI
 struct WorkPreferencesForm: View {
     @Binding var preferences: WorkPreferences
 
-    /// Offered as meeting/focus targets: half-hour steps, since that's the
-    /// resolution `HoursFormat` displays anyway.
-    private static let dailyHourOptions: [Double] = Array(stride(from: 0.5, through: 8.0, by: 0.5))
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             row("Hours a week") {
                 HStack(spacing: 6) {
                     Text(HoursFormat.string(preferences.weeklyTargetHours))
                         .font(.system(size: 12).monospacedDigit())
-                    Stepper("", value: $preferences.weeklyTargetHours, in: 5...80, step: 1)
+                    Stepper("", value: $preferences.weeklyTargetHours, in: WorkPreferences.weeklyTargetRange, step: 1)
                         .labelsHidden()
                 }
             }
@@ -69,7 +65,7 @@ struct WorkPreferencesForm: View {
     private func optionalHoursPicker(selection: Binding<Double?>) -> some View {
         Picker("", selection: selection) {
             Text("Not set").tag(Double?.none)
-            ForEach(Self.dailyHourOptions, id: \.self) { hours in
+            ForEach(WorkPreferences.dailyHoursOptions, id: \.self) { hours in
                 Text(HoursFormat.string(hours)).tag(Double?.some(hours))
             }
         }

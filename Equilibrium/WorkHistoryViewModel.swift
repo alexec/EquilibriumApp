@@ -376,10 +376,14 @@ final class WorkHistoryViewModel: ObservableObject {
 
     /// Permanently blanks out a day's hours (0h), protected like any other
     /// manual override so automatic refreshes never repopulate it.
+    ///
+    /// Deliberately the same path as removing the day's last shift by hand,
+    /// since it leaves the day in the same state: what's deleted is the
+    /// hours, and the day's meetings are no business of the trash button.
+    /// Building a fresh empty span here instead threw them away, and left
+    /// the two routes to an empty day disagreeing about it.
     func deleteHours(for date: Date) {
-        let span = WorkdaySpan(dayKey: dayKey(for: date), isManual: true)
-        spansByDay = store.setManualSpan(span)
-        refreshWeekHeaderSummaries()
+        setShifts(for: date, [])
     }
 
     /// Adds a shift to a day — from clicking one of its ghost outlines, or

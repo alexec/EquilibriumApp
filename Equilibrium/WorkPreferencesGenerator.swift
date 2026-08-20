@@ -67,22 +67,20 @@ enum WorkPreferencesGenerator {
         do {
             let response = try await session.respond(to: text, generating: Parsed.self)
             let parsed = response.content
-            // The model is guided, not constrained: it can still hand back
-            // a shift that ends before it starts, which nothing downstream
-            // can draw. Those are dropped rather than repaired, since
-            // there's no telling which of the two hours it meant.
-            let shifts = [
-                ShiftTemplate(slot: .morning, startHour: parsed.morningStartHour, endHour: parsed.morningEndHour),
-                ShiftTemplate(slot: .afternoon, startHour: parsed.afternoonStartHour, endHour: parsed.afternoonEndHour),
-                ShiftTemplate(slot: .evening, startHour: parsed.eveningStartHour, endHour: parsed.eveningEndHour),
-            ].filter { $0.endHour > $0.startHour && $0.startHour >= 0 && $0.endHour <= 24 }
-
+            // The model is guided, not constrained — it can hand back a
+            // shift that ends before it starts, or a 200-hour week — so
+            // what it says is held to the same bounds the manual editor
+            // enforces before it becomes settings. See `sanitized()`.
             return WorkPreferences(
                 weeklyTargetHours: parsed.weeklyTargetHours,
-                shifts: shifts.isEmpty ? ShiftTemplate.standard : shifts,
+                shifts: [
+                    ShiftTemplate(slot: .morning, startHour: parsed.morningStartHour, endHour: parsed.morningEndHour),
+                    ShiftTemplate(slot: .afternoon, startHour: parsed.afternoonStartHour, endHour: parsed.afternoonEndHour),
+                    ShiftTemplate(slot: .evening, startHour: parsed.eveningStartHour, endHour: parsed.eveningEndHour),
+                ],
                 targetMeetingHoursPerDay: parsed.targetMeetingHoursPerDay,
                 targetFocusHoursPerDay: parsed.targetFocusHoursPerDay
-            )
+            ).sanitized()
         } catch {
             return nil
         }
