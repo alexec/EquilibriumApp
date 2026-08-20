@@ -66,6 +66,44 @@ final class WorkHistoryViewModel: ObservableObject {
     /// wherever the model is unavailable or hasn't answered yet — the panel
     /// shows the count and hours regardless.
     @Published var meetingGists: [String: String] = [:]
+
+    /// The inbox, newest first, as of the last trip to Mail.
+    @Published private(set) var mailMessages: [MailMessage] = []
+    /// One summary per message id, seeded from disk at launch so a relaunch
+    /// shows yesterday's conclusions immediately instead of an empty column
+    /// while the model works through them again.
+    @Published private(set) var mailSummaries: [String: MailSummary] = [:]
+    @Published private(set) var mailAccess: MailAccessState = .pending
+    /// The two-sentence "what today asks of you" above the inbox. Nil until
+    /// there's one worth showing; the column falls back to counts.
+    @Published private(set) var dayBrief: String?
+    /// Every address configured in Mail — used to leave you out of your own
+    /// people list.
+    @Published private(set) var myAddresses: Set<String> = []
+    /// Who you're working with, and the counts under the brief.
+    ///
+    /// Stored rather than computed on demand, because both are read from
+    /// `ContentView`'s body and both are expensive: `meetings(for:)` runs an
+    /// EventKit query every time it's called, and SwiftUI calls a body far
+    /// more often than the underlying data changes. Recomputed from
+    /// `refreshDerivedMailState()` whenever something they depend on moves.
+    @Published private(set) var currentPeople: [PersonActivity] = []
+    @Published private(set) var dayBriefFallback: String = ""
+    /// Why the last archive didn't happen, when it didn't.
+    @Published private(set) var archiveProblem: String?
+    /// When each deferred message should come back, by message id. Read
+    /// from Reminders rather than owned here.
+    @Published private(set) var mailDeferrals: [String: Date] = [:]
+    /// Why the last deferral didn't happen, when it didn't.
+    @Published private(set) var deferProblem: String?
+    /// Whether the column is currently showing what's been deferred away.
+    @Published var showsDeferred = false
+    /// Whether the preferences sheet is up.
+    ///
+    /// Lives here rather than in `ContentView`'s `@State` because the thing
+    /// that opens it is now a menu command, and a `Commands` builder can't
+    /// reach into a view's private state.
+    @Published var showsPreferences = false
     /// The day shown in the panel beside the chart. Always set — the panel
     /// is permanent furniture rather than something you open — so this
     /// starts on today and only ever moves to another day.
@@ -75,6 +113,9 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var availableCalendars: [SelectableCalendar] = []
     /// Which calendar is read, or `nil` while the user hasn't picked one.
     @Published var calendarSelection: String?
+    /// Mail accounts for the picker, and the chosen one.
+    @Published var mailAccounts: [SelectableMailAccount] = []
+    @Published var mailSelection: String?
     /// Which week the chart shows, counted from the current one: 0 is this
     /// week, -1 last week. The chart is deliberately one week at a time —
     /// the week is the unit everything else here works in (the target, the
@@ -85,6 +126,7 @@ final class WorkHistoryViewModel: ObservableObject {
     private let store = WorkHistoryStore()
     private let intentionStore = DailyIntentionStore()
     private let liveEventStore = LiveEventStore()
+    private let mailSummaryStore = MailSummaryStore()
     private let calendar: Calendar = .current
     private var autoRefreshTimer: Timer?
     private var menuBarTimer: Timer?
@@ -108,6 +150,8 @@ final class WorkHistoryViewModel: ObservableObject {
         spansByDay = store.load()
         intentionsByDay = intentionStore.load()
         calendarSelection = CalendarStore.shared.selection
+        mailSummaries = mailSummaryStore.load()
+        mailSelection = MailStore.shared.selection
         // Built here so the menu bar has its figure from the first draw.
         // Everything else that sets it waits on calendar access, which can
         // take a while — or never come back — and the label would have sat
@@ -120,6 +164,19 @@ final class WorkHistoryViewModel: ObservableObject {
     private var lastWeekHeaderStats: [String: WeeklyInsightGenerator.WeekHeaderStats] = [:]
     /// The meetings each day's gist was generated from, same idea.
     private var lastGistMeetings: [String: String] = [:]
+    /// What the day brief was last written from, so the second pass doesn't
+    /// re-run on every five-minute tick that changed nothing.
+    private var lastBriefSignature: String?
+    /// Addresses the calendar says are you, gathered once per refresh
+    /// rather than per day selection.
+    private var calendarSelfAddresses: Set<String> = []
+    /// Every meeting in the week on screen, for the people strip. Cached
+    /// because gathering it is seven EventKit queries and the strip is
+    /// rebuilt on every day click.
+    private var weekMeetings: [DayMeeting] = []
+    /// Guards against a timer refresh starting while a manual one is still
+    /// working through the inbox — the model pass takes seconds per message.
+    private var isRefreshingMail = false
 
     private let dayKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -158,7 +215,10 @@ final class WorkHistoryViewModel: ObservableObject {
         powerMonitor.start()
         guard autoRefreshTimer == nil else { return }
         autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: Self.autoRefreshInterval, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            Task { @MainActor in
+                self?.refresh()
+                await self?.refreshMail()
+            }
         }
         // A minute, not five: the menu bar's line moves on its own as the
         // day passes — the figure counts down, and a meeting drops off the
@@ -343,6 +403,8 @@ final class WorkHistoryViewModel: ObservableObject {
         refreshWeekHeaderSummaries()
         refreshMeetingGist()
         refreshTodaysMeetings()
+        reloadWeekMeetings()
+        refreshDerivedMailState()
     }
 
     /// Drag-clamp bounds for a meeting: the workday when one exists,
@@ -576,6 +638,7 @@ final class WorkHistoryViewModel: ObservableObject {
         weekOffset -= 1
         moveSelectionWithWeek(days: -7)
         refreshWeekHeaderSummaries()
+        reloadWeekPeople()
     }
 
     func showNextWeek() {
@@ -583,12 +646,20 @@ final class WorkHistoryViewModel: ObservableObject {
         weekOffset += 1
         moveSelectionWithWeek(days: 7)
         refreshWeekHeaderSummaries()
+        reloadWeekPeople()
     }
 
     /// Keeps the panel on the week the chart is showing, landing on the same
     /// weekday: paging back from Monday shows the Monday before it. Without
     /// this the panel would sit on a day that isn't among the bars beside
     /// it, its highlighted column nowhere on screen.
+    /// Paging to another week changes whose meetings the strip is drawn
+    /// from, so it's re-read here rather than left showing last week's.
+    private func reloadWeekPeople() {
+        reloadWeekMeetings()
+        refreshDerivedMailState()
+    }
+
     private func moveSelectionWithWeek(days: Int) {
         guard let moved = calendar.date(byAdding: .day, value: days, to: dayEditor.day) else { return }
         // Paging forward can land past today, which has no check-in to make;
@@ -767,6 +838,7 @@ final class WorkHistoryViewModel: ObservableObject {
     func selectDay(_ day: Date, kind: DailyPromptKind) {
         dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
         refreshMeetingGist()
+        refreshDerivedMailState()
     }
 
     /// Asks the on-device model for a phrase describing the panel's day.
@@ -776,6 +848,351 @@ final class WorkHistoryViewModel: ObservableObject {
     /// event, or today simply gaining another meeting all change the list,
     /// and a phrase describing meetings that are no longer shown is worse
     /// than none. Unchanged lists don't ask the model again.
+    // MARK: - Mail
+
+    /// Reads the inbox and works through anything new in it.
+    ///
+    /// Two passes, in order: Mail is asked for the messages, then each one
+    /// that hasn't been seen before goes through the model. The second pass
+    /// publishes as it goes rather than at the end — a message takes a
+    /// second or two, forty of them is a minute, and a column that fills in
+    /// row by row is honest about that in a way a spinner isn't.
+    func refreshMail() async {
+        guard !isRefreshingMail else { return }
+        isRefreshingMail = true
+        defer { isRefreshingMail = false }
+
+        switch await MailStore.shared.fetch() {
+        case .failed(let state):
+            mailAccess = state
+            // Messages already on screen are left alone. A refusal or a
+            // busy Mail is a fact about this attempt, not about the mail —
+            // blanking the column on a failed poll would make a working
+            // inbox flicker away every time Mail was mid-sync.
+        case .fetched(let fetch):
+            mailAccess = .granted
+            // Read alongside the inbox rather than when preferences opens:
+            // the picker is behind a popover that has to draw immediately,
+            // and a trip to Mail takes seconds.
+            mailAccounts = await MailStore.shared.accounts()
+            mailMessages = fetch.messages
+            myAddresses = fetch.myAddresses
+            await refreshDeferrals()
+            await summariseNewMail()
+            refreshDerivedMailState()
+            await refreshDayBrief()
+        }
+    }
+
+    /// Summarises every message without a stored summary, oldest first so
+    /// the column fills downward the way it reads.
+    private func summariseNewMail() async {
+        // Anything never summarised, and anything summarised by a prompt
+        // that has since been rewritten.
+        let pending = mailMessages.filter {
+            mailSummaries[$0.id]?.generatorVersion != MailSummaryGenerator.promptVersion
+        }
+        guard !pending.isEmpty else { return }
+
+        for message in pending.reversed() {
+            let candidates = MailDueDates.candidates(in: message)
+            let summary: MailSummary
+            if MailSummaryGenerator.isAvailable, #available(macOS 26.0, *) {
+                summary = await MailSummaryGenerator.generate(for: message, candidates: candidates)
+            } else {
+                summary = MailSummaryGenerator.fallback(for: message, candidates: candidates)
+            }
+            mailSummaries[message.id] = summary
+            mailSummaryStore.upsert(summary)
+        }
+    }
+
+    /// Rewrites the line above the inbox, when what it would be written
+    /// from has actually changed.
+    private func refreshDayBrief() async {
+        let input = dayBriefInput()
+        let signature = "\(input)"
+        guard lastBriefSignature != signature else { return }
+        lastBriefSignature = signature
+
+        guard DayBriefGenerator.isAvailable, #available(macOS 26.0, *) else {
+            dayBrief = nil
+            return
+        }
+        let generated = await DayBriefGenerator.generate(for: input)
+        // The inbox can change again while the model is thinking, in which
+        // case a second pass is already running and this answer describes a
+        // day nobody is looking at any more.
+        guard lastBriefSignature == signature else { return }
+        dayBrief = generated
+    }
+
+    /// What the brief is written from: today's meetings, and the action
+    /// lines the first pass produced for the messages.
+    func dayBriefInput() -> DayBriefGenerator.Input {
+        let meetings = meetings(for: Date())
+        let soon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: Date())) ?? Date()
+        // Drawn from what's on screen. A brief that counted work you had
+        // explicitly put off until Thursday would be describing a day you
+        // decided not to have.
+        let visible = visibleMailMessages
+        let summaries = visible.compactMap { mailSummaries[$0.id] }
+        return DayBriefGenerator.Input(
+            actionLines: summaries.filter { $0.hasAction }.map(\.action),
+            messageCount: visible.count,
+            unreadCount: visible.filter(\.isUnread).count,
+            dueSoonCount: summaries.filter { ($0.dueDate ?? .distantFuture) < soon }.count,
+            meetingTitles: meetings.map(\.title),
+            meetingMinutes: meetings.reduce(0) { $0 + $1.durationMinutes }
+        )
+    }
+
+    /// The summary for a message, once there is one.
+    func summary(for message: MailMessage) -> MailSummary? {
+        mailSummaries[message.id]
+    }
+
+    // MARK: - Deferring
+
+    /// The messages the column shows: everything except what's been put off
+    /// until a later day.
+    ///
+    /// Deferred mail is hidden rather than removed, and `deferredCount`
+    /// keeps it one click away — an inbox that silently swallows things is
+    /// worse than a full one, because you stop trusting it.
+    var visibleMailMessages: [MailMessage] {
+        let shown = showsDeferred
+            ? mailMessages
+            : mailMessages.filter { !MailDeferral.isHidden(mailDeferrals[$0.id]) }
+
+        // Anything due today or already overdue floats to the top, newest
+        // first within each group. Received order is the right default for
+        // an inbox and the wrong one for a list you're working from: a
+        // deadline that lands today matters more than a message that
+        // arrived an hour ago, and it was sitting five rows down.
+        return shown.sorted { left, right in
+            let leftDue = isDueToday(left)
+            let rightDue = isDueToday(right)
+            if leftDue != rightDue { return leftDue }
+            return left.receivedAt > right.receivedAt
+        }
+    }
+
+    /// Whether this message's deadline has arrived.
+    private func isDueToday(_ message: MailMessage) -> Bool {
+        guard let due = mailSummaries[message.id]?.dueDate else { return false }
+        return calendar.startOfDay(for: due) <= calendar.startOfDay(for: Date())
+    }
+
+    var deferredCount: Int {
+        mailMessages.filter { MailDeferral.isHidden(mailDeferrals[$0.id]) }.count
+    }
+
+    func deferralDate(for message: MailMessage) -> Date? {
+        mailDeferrals[message.id]
+    }
+
+    /// Puts a message off until `date`.
+    ///
+    /// Two writes, both to somewhere that already existed: a reminder in
+    /// Reminders carrying the date and a link back to the message, and a
+    /// flag on the message so Mail shows you which ones you've put off.
+    /// Nothing about the deferral is stored by this app.
+    func deferMessage(_ message: MailMessage, until date: Date) async {
+        guard await RemindersStore.shared.requestAccess() else {
+            deferProblem = "Equilibrium needs access to Reminders to defer mail. System Settings › Privacy & Security › Reminders."
+            return
+        }
+
+        let note = mailSummaries[message.id]?.action
+        let written = RemindersStore.shared.addReminder(
+            messageID: message.id,
+            subject: message.displaySubject,
+            note: (note?.isEmpty ?? true) ? nil : note,
+            until: date
+        )
+        guard written else {
+            deferProblem = "Couldn't add a reminder — there's no list here to add it to."
+            return
+        }
+
+        deferProblem = nil
+        // Shown straight away rather than waiting for the reminder store to
+        // be read back: the row should leave the moment you choose a day.
+        mailDeferrals[message.id] = date
+        await MailStore.shared.setFlagged(messageID: message.id, flagged: true)
+        refreshDerivedMailState()
+    }
+
+    /// Brings it back now.
+    func undeferMessage(_ message: MailMessage) async {
+        await RemindersStore.shared.clear(messageID: message.id)
+        await MailStore.shared.setFlagged(messageID: message.id, flagged: false)
+        mailDeferrals.removeValue(forKey: message.id)
+        deferProblem = nil
+        refreshDerivedMailState()
+    }
+
+    /// Re-reads the deferrals from Reminders.
+    ///
+    /// Which makes a reminder completed or deleted in the Reminders app —
+    /// or on a phone — bring the message back here, since that store is now
+    /// the only record of the decision.
+    func refreshDeferrals() async {
+        guard RemindersStore.shared.isAuthorized else { return }
+        mailDeferrals = await RemindersStore.shared.deferrals()
+        refreshDerivedMailState()
+    }
+
+    /// Files a message into its account's archive and takes it off screen.
+    ///
+    /// The row goes on `notFound` as well as on success: either way the
+    /// message is no longer in the inbox, and leaving it there would show
+    /// something that isn't so.
+    func archive(_ message: MailMessage) async {
+        switch await MailStore.shared.archive(messageID: message.id) {
+        case .archived, .notFound:
+            archiveProblem = nil
+            mailMessages.removeAll { $0.id == message.id }
+            // A deferral on a message that has left the inbox is a decision
+            // about something that no longer exists.
+            if mailDeferrals[message.id] != nil {
+                await RemindersStore.shared.clear(messageID: message.id)
+                mailDeferrals.removeValue(forKey: message.id)
+            }
+            refreshDerivedMailState()
+        case .noArchiveMailbox:
+            archiveProblem = "That account has no archive mailbox, so the message was left where it is."
+        case .failed:
+            archiveProblem = "Mail wouldn't archive that message."
+        }
+    }
+
+    // MARK: - Blocking out time
+
+    /// Where a piece of work from `message` could go, at `minutes` long.
+    ///
+    /// Read fresh each time rather than cached: this runs when a popover
+    /// opens, not on every render, and a slot worked out from a diary five
+    /// minutes stale is how you double-book yourself.
+    func recommendedBlock(for message: MailMessage, minutes: Int) -> TimeBlockPlanner.Slot? {
+        guard calendarAccessGranted else { return nil }
+        let days = TimeBlockPlanner.remainingWeekDays()
+        return TimeBlockPlanner.firstSlot(
+            minutes: minutes,
+            busy: CalendarStore.shared.busyIntervals(on: days),
+            shifts: preferences.shifts,
+            days: days
+        )
+    }
+
+    /// The days a block can be put on: what's left of this week.
+    func blockableDays() -> [Date] {
+        TimeBlockPlanner.remainingWeekDays()
+    }
+
+    /// The times a block could start on `day`, and whether each is free.
+    func blockStartTimes(on day: Date, minutes: Int) -> [(start: Date, isFree: Bool)] {
+        let busy = calendarAccessGranted ? CalendarStore.shared.busyIntervals(on: [day]) : []
+        return TimeBlockPlanner.startTimes(
+            on: day,
+            minutes: minutes,
+            shifts: preferences.shifts,
+            busy: busy
+        )
+    }
+
+    /// Whether a slot chosen by hand is actually free.
+    ///
+    /// The recommendation is worked out around the diary, but the moment
+    /// someone can move it themselves they can move it onto a meeting —
+    /// and a planner that silently double-books is worse than one that
+    /// doesn't plan. Cheap enough to call per keystroke: one EventKit read
+    /// over the day being looked at.
+    func isSlotFree(start: Date, minutes: Int) -> Bool {
+        guard calendarAccessGranted else { return true }
+        let end = start.addingTimeInterval(TimeInterval(minutes * 60))
+        return !CalendarStore.shared.busyIntervals(on: [start, end]).contains { interval in
+            interval.start < end && interval.end > start
+        }
+    }
+
+    /// Writes the block, and folds it into what's on screen.
+    func addFocusBlock(for message: MailMessage, slot: TimeBlockPlanner.Slot) -> Bool {
+        let action = mailSummaries[message.id]?.action ?? ""
+        let created = CalendarStore.shared.createFocusBlock(
+            // Named after the message, since that's what you'll be looking
+            // at when the block comes round and you have to remember why
+            // you claimed the hour.
+            title: message.displaySubject,
+            start: slot.start,
+            end: slot.end,
+            notes: action.isEmpty
+                ? "Focus time blocked from a message in Equilibrium."
+                : "\(action)\n\nFocus time blocked from a message in Equilibrium."
+        )
+        guard created else { return false }
+        // The chart draws meetings from the calendar, and this event is
+        // deliberately not one, so nothing on the bars changes — but the
+        // slot is now taken, and the next recommendation has to know.
+        Task { await refreshMeetingData() }
+        return true
+    }
+
+    /// Points the app at one mail account, or back at every account.
+    func updateMailSelection(_ identifier: String?) {
+        MailStore.shared.updateSelection(identifier)
+        mailSelection = identifier
+        // The inbox on screen belongs to the account that was just
+        // deselected, so it goes immediately rather than lingering until
+        // the fetch returns.
+        mailMessages = []
+        dayBrief = nil
+        refreshDerivedMailState()
+        Task { await refreshMail() }
+    }
+
+    /// Rebuilds the people strip and the counts above the inbox.
+    ///
+    /// The strip is drawn from the inbox's own window (a week) plus the day
+    /// the panel is showing — not the whole visible week of meetings. "At
+    /// the moment" is what the strip is for, so paging back to March
+    /// shouldn't repopulate it with the people you dealt with then, while
+    /// the day you actually selected is the one you're thinking about.
+    ///
+    /// One EventKit read between them, rather than one per SwiftUI render.
+    /// Re-reads the week's meetings and the addresses that are you.
+    func reloadWeekMeetings() {
+        guard calendarAccessGranted else {
+            weekMeetings = []
+            calendarSelfAddresses = []
+            return
+        }
+        let days = visibleWeekDays
+        weekMeetings = days.flatMap { CalendarStore.shared.dayMeetings(on: $0) }
+        calendarSelfAddresses = CalendarStore.shared.currentUserAddresses(on: days)
+    }
+
+    func refreshDerivedMailState() {
+        // Mail's own accounts, plus any address the calendar recognises as
+        // you — see `CalendarStore.currentUserAddresses`. Read from the
+        // cache rather than the calendar: this method runs on every day
+        // click, and gathering it is a week of EventKit queries.
+        let me = myAddresses.union(calendarSelfAddresses)
+        // Everyone on the week's events, not just the selected day's, and
+        // everyone on a message you haven't put off. The strip answers "who
+        // am I working with at the moment": a Tuesday spent looking at
+        // Thursday shouldn't empty it of the people you're seeing this week,
+        // and a message deferred to next Monday isn't this moment's problem.
+        currentPeople = PeopleDirectory.people(
+            messages: visibleMailMessages,
+            meetings: weekMeetings,
+            myAddresses: me,
+            myNames: Set(mailAccounts.map(\.fullName).filter { !$0.isEmpty })
+        )
+        dayBriefFallback = dayBriefInput().fallbackSentence
+    }
+
     func refreshMeetingGist() {
         guard MeetingSummaryGenerator.isAvailable else { return }
         guard #available(macOS 26.0, *) else { return }

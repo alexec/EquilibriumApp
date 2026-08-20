@@ -207,7 +207,8 @@ struct DayDetailPanel: View {
         )
     }
 
-    static let width: CGFloat = 280
+    /// Matched to the inbox column opposite — see `SideColumn`.
+    static let width: CGFloat = SideColumn.width
 
     /// There's no Save button: the panel isn't a dialog you finish with, so
     /// speaking is the whole interaction. Writes are debounced rather than
@@ -366,48 +367,34 @@ struct DayDetailPanel: View {
     /// Above this many, the day arrives summarised.
     private static let meetingsShownInFull = 4
 
+    /// Who to name on a meeting row: the organiser where there is one, and
+    /// otherwise the first attendee, so an invitation that arrived without
+    /// an organiser still says who you're meeting rather than "+3" alone.
+    func meetingHost(_ meeting: DayMeeting) -> (primary: Person, others: [Person])? {
+        if let organizer = meeting.organizer {
+            return (organizer, meeting.participants)
+        }
+        guard let first = meeting.participants.first else { return nil }
+        return (first, Array(meeting.participants.dropFirst()))
+    }
+
     /// The day's meetings, each with the camera that joins its call where
     /// the invitation carries one — the same button the menu bar's list
     /// has, in the same place, since this is the list you're looking at
     /// when the window is already open and the menu bar isn't.
+    /// The day's meetings, each one a target that opens what you can do
+    /// about it — the same panel the inbox rows open.
+    ///
+    /// This replaced a small camera button sitting at the end of the row.
+    /// The camera was the only thing you could click, it was eleven points
+    /// across, and it sat next to five identical ones; the rest of the row,
+    /// far easier to hit, did nothing. Now the row is the target and the
+    /// panel names who's coming, which is usually why you were opening the
+    /// invitation in the first place.
     private var meetingRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(meetings) { meeting in
-                HStack(alignment: .center, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Text(meeting.title)
-                            .font(.system(size: 12))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if let joinURL = meeting.joinURL {
-                        Button {
-                            MeetingLinks.join(joinURL)
-                        } label: {
-                            Image(systemName: "video.fill")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Color.accentColor)
-                                // The camera is small because it sits beside
-                                // the title rather than competing with it;
-                                // what you aim at shouldn't be that small, so
-                                // the padding is inside the shape being hit.
-                                .padding(4)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Join \(joinURL.host ?? "the call")")
-                        // The row already reads out its title and time; the
-                        // camera has to name the meeting itself, or it's an
-                        // unlabelled button next to six identical ones.
-                        .accessibilityLabel("Join \(meeting.title)")
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                MeetingRow(meeting: meeting, day: day, host: meetingHost(meeting))
             }
         }
     }
@@ -497,4 +484,74 @@ struct DayDetailPanel: View {
         formatter.dateFormat = "EEE d MMM yyyy"
         return formatter
     }()
+}
+
+
+/// One meeting in the day panel: the row, and the panel it opens.
+private struct MeetingRow: View {
+    let meeting: DayMeeting
+    let day: Date
+    /// Who to name on the row — organiser where there is one. See
+    /// `DayDetailPanel.meetingHost`.
+    let host: (primary: Person, others: [Person])?
+
+    @State private var isHovering = false
+    @State private var showsActions = false
+
+    var body: some View {
+        Button {
+            showsActions = true
+        } label: {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
+                        .font(.system(size: 10).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    // Kept on the row, not just in the panel: a call you can
+                    // join is a fact about the next fifteen minutes, and
+                    // needing to open something to find it out defeats it.
+                    if meeting.joinURL != nil {
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
+                Text(meeting.title)
+                    .font(.system(size: 12))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Who called it, and how many others are coming — the same
+                // line, in the same shape, as a message's sender in the
+                // inbox column. A meeting you made yourself has neither and
+                // shows nothing.
+                if let host {
+                    ParticipantLabel(primary: host.primary, others: host.others, limit: 18)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(isHovering ? 0.06 : 0))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .popover(isPresented: $showsActions, arrowEdge: .leading) {
+            MeetingActionPopover(
+                meeting: meeting,
+                day: day,
+                onJoin: { url in
+                    MeetingLinks.join(url)
+                    showsActions = false
+                },
+                onOpenInCalendar: {
+                    MeetingLinks.showInCalendar(identifier: meeting.eventIdentifier, on: day)
+                    showsActions = false
+                }
+            )
+        }
+    }
 }

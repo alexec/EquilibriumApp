@@ -1,6 +1,19 @@
 import EventKit
 import Foundation
 
+extension Person {
+    /// EventKit describes a participant by a URL, which for a person is
+    /// always `mailto:` — the same address a message would arrive from, so
+    /// the organiser of your 3pm and the sender of this morning's email
+    /// resolve to one person rather than two.
+    init?(participant: EKParticipant) {
+        let address = participant.url.absoluteString
+            .replacingOccurrences(of: "mailto:", with: "")
+        guard address.contains("@") else { return nil }
+        self.init(address: address, name: participant.name)
+    }
+}
+
 /// Wraps EventKit calendar access: requests permission once, then exposes
 /// synchronous (main-thread-safe) helpers for reading meeting events.
 final class CalendarStore {
@@ -129,6 +142,117 @@ final class CalendarStore {
         }
     }
 
+    /// The addresses EventKit recognises as *you*, gathered from the
+    /// attendee lists of the days given.
+    ///
+    /// Mail knows the addresses on its own accounts, which is most of the
+    /// answer, but people are invited to meetings at addresses they don't
+    /// collect mail for — an old work address, a personal one on a shared
+    /// calendar. Every one of those would otherwise show up in the people
+    /// strip as somebody you work with, which is a strange thing to be told
+    /// about yourself.
+    func currentUserAddresses(on days: [Date]) -> Set<String> {
+        var found: Set<String> = []
+        for day in days {
+            for event in meetingEvents(on: day) {
+                for attendee in event.attendees ?? [] where attendee.isCurrentUser {
+                    if let person = Person(participant: attendee) {
+                        found.insert(person.address)
+                    }
+                }
+            }
+        }
+        return found
+    }
+
+    // MARK: - Busy time
+
+    /// Everything already claiming time on these days, for planning around.
+    ///
+    /// Wider than `meetingEvents` on purpose. That one drops events marked
+    /// free, because they aren't meetings you attended; here they very much
+    /// count, since a block of focus time you set aside last week is time
+    /// you have already promised yourself. All-day events are still
+    /// excluded — "on leave" spanning a whole day would otherwise leave no
+    /// slot anywhere, when what it actually means is a question for you
+    /// rather than an obstacle for the planner.
+    ///
+    /// Reads every calendar regardless of the user's reading selection: the
+    /// point is to avoid double-booking them, and a clash on the calendar
+    /// they didn't pick is still a clash.
+    func busyIntervals(on days: [Date]) -> [(start: Date, end: Date)] {
+        let calendar = Calendar.current
+        guard let first = days.min(), let last = days.max() else { return [] }
+        let start = calendar.startOfDay(for: first)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: last)) else {
+            return []
+        }
+
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+        return store.events(matching: predicate).compactMap { event in
+            guard !event.isAllDay else { return nil }
+            guard let eventStart = event.startDate, let eventEnd = event.endDate, eventStart < eventEnd else {
+                return nil
+            }
+            return (eventStart, eventEnd)
+        }
+    }
+
+    // MARK: - Writing focus blocks
+
+    /// Puts a block of focus time in the calendar.
+    ///
+    /// The only thing this app writes. Everything else it does with
+    /// EventKit is reading, and it stays that way — this creates events and
+    /// never edits or deletes one, so nothing already in your calendar can
+    /// be changed by it.
+    ///
+    /// **Marked as free, deliberately.** A block of your own focus time is
+    /// not a meeting, and the app's own definition of a meeting is exactly
+    /// "an event that isn't marked free" (see `meetingEvents`). Writing the
+    /// block as free is therefore not a convention that has to be
+    /// remembered anywhere else: the time is claimed in your diary, other
+    /// people see it as taken when they look for a slot, and Equilibrium's
+    /// meeting count doesn't move — which matters when the reason for
+    /// blocking the time was to have fewer meetings.
+    @discardableResult
+    func createFocusBlock(title: String, start: Date, end: Date, notes: String?) -> Bool {
+        guard start < end else { return false }
+        guard let destination = writableCalendar() else { return false }
+
+        let event = EKEvent(eventStore: store)
+        event.calendar = destination
+        event.title = title
+        event.startDate = start
+        event.endDate = end
+        event.availability = .free
+        event.notes = notes
+
+        do {
+            try store.save(event, span: .thisEvent, commit: true)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Where a block goes: the calendar being read when it can be written
+    /// to, so the block lands beside the meetings it was planned around,
+    /// and otherwise whatever Calendar itself would have used.
+    ///
+    /// A chosen calendar can easily be read-only — a subscribed work
+    /// calendar, a shared one you're only invited to — so it can't simply
+    /// be assumed.
+    private func writableCalendar() -> EKCalendar? {
+        if let selectedIdentifier,
+           let chosen = store.calendar(withIdentifier: selectedIdentifier),
+           chosen.allowsContentModifications {
+            return chosen
+        }
+        let fallback = store.defaultCalendarForNewEvents
+        return (fallback?.allowsContentModifications ?? false) ? fallback : nil
+    }
+
     /// Title-preserving meeting list for intention / check-in UI (not merged).
     func dayMeetings(on date: Date) -> [DayMeeting] {
         meetingEvents(on: date)
@@ -139,13 +263,22 @@ final class CalendarStore {
                 let title = (event.title?.trimmingCharacters(in: .whitespacesAndNewlines))
                     .flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled meeting"
                 let id = event.eventIdentifier ?? "\(title)-\(start.timeIntervalSinceReferenceDate)"
+                // Attendees are only populated on events that were actually
+                // invitations; a note-to-self in your own calendar has none,
+                // and reads correctly as a meeting with nobody else in it.
+                let attendees = (event.attendees ?? []).filter { !$0.isCurrentUser }
+                let organizer = event.organizer.flatMap(Person.init(participant:))
                 return DayMeeting(
                     id: id,
                     title: title,
                     start: start,
                     end: end,
                     joinURL: MeetingLinks.joinURL(for: event),
-                    eventIdentifier: event.eventIdentifier
+                    eventIdentifier: event.eventIdentifier,
+                    organizer: organizer,
+                    participants: attendees
+                        .compactMap(Person.init(participant:))
+                        .filter { $0 != organizer }
                 )
             }
             .sorted { $0.start < $1.start }

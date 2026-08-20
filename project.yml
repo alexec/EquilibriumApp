@@ -43,8 +43,14 @@ targets:
         # macOS 14+ matches requestFullAccessToEvents() against the *FullAccess*
         # key; the plain key is the pre-14 spelling and is kept for macOS 13.
         INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
+        INFOPLIST_KEY_NSAppleEventsUsageDescription: "Equilibrium asks Mail for the subjects and senders in your inbox so it can summarise what needs doing, and files a message away when you archive it. It never sends or deletes mail, and nothing leaves your Mac."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Equilibrium listens when you dictate an intention or check-in. Speech is transcribed on this Mac and the recording is never stored or sent anywhere."
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Equilibrium turns your dictated intentions and check-ins into text using on-device speech recognition. Nothing is sent off your Mac."
+        # Reminders is where a deferred message's date lives — Mail's own
+        # Remind Me isn't scriptable, so there is nowhere else Apple-native
+        # to put it. Asked for only when you first defer something.
+        INFOPLIST_KEY_NSRemindersFullAccessUsageDescription: "Equilibrium adds a reminder when you defer an email, so it comes back on the day you chose. It only reads reminders it created itself."
+        INFOPLIST_KEY_NSRemindersUsageDescription: "Equilibrium adds a reminder when you defer an email, so it comes back on the day you chose. It only reads reminders it created itself."
         INFOPLIST_KEY_NSCalendarsUsageDescription: "Equilibrium reads your calendar to measure meeting time versus focus time. It never modifies events and sends nothing off your Mac."
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"

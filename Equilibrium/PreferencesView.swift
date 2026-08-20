@@ -25,6 +25,11 @@ struct PreferencesView: View {
     /// Chosen calendar, `nil` when every calendar is read.
     let calendarSelection: String?
     let onCalendarSelectionChange: (String?) -> Void
+    /// Mail accounts offered by the picker; empty when Mail hasn't been
+    /// read yet, or automation was declined.
+    let mailAccounts: [SelectableMailAccount]
+    let mailSelection: String?
+    let onMailSelectionChange: (String?) -> Void
 
     @State private var freeText: String
     @State private var draft: WorkPreferences
@@ -45,6 +50,9 @@ struct PreferencesView: View {
         calendars: [SelectableCalendar],
         calendarSelection: String?,
         onCalendarSelectionChange: @escaping (String?) -> Void,
+        mailAccounts: [SelectableMailAccount],
+        mailSelection: String?,
+        onMailSelectionChange: @escaping (String?) -> Void,
         onSave: @escaping (WorkPreferences) -> Void
     ) {
         self.current = current
@@ -52,6 +60,9 @@ struct PreferencesView: View {
         self.calendars = calendars
         self.calendarSelection = calendarSelection
         self.onCalendarSelectionChange = onCalendarSelectionChange
+        self.mailAccounts = mailAccounts
+        self.mailSelection = mailSelection
+        self.onMailSelectionChange = onMailSelectionChange
         self.modelUnavailability = OnDeviceModel.unavailability
         _draft = State(initialValue: current)
         _freeText = State(initialValue: Self.examplePrompt)
@@ -77,6 +88,12 @@ struct PreferencesView: View {
                 calendars: calendars,
                 selection: calendarSelection,
                 onChange: onCalendarSelectionChange
+            )
+
+            MailAccountPickerView(
+                accounts: mailAccounts,
+                selection: mailSelection,
+                onChange: onMailSelectionChange
             )
 
             // The generated sentence is the only feedback the free-text path

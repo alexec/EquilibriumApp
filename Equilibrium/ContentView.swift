@@ -1,11 +1,102 @@
 import SwiftUI
 
+/// The width of the two columns either side of the chart.
+///
+/// One constant, because they are the same width and looked wrong when
+/// they weren't: the inbox and the day panel are the two text columns
+/// framing the week, and an inbox wider than the panel opposite reads as a
+/// mistake rather than as emphasis. Fixed rather than flexible so they stay
+/// equal at every window size — sharing slack between two flexible columns
+/// and a flexible chart divides it by rules nobody can see.
+enum SideColumn {
+    static let width: CGFloat = 300
+}
+
 struct ContentView: View {
     @ObservedObject var viewModel: WorkHistoryViewModel
-    @State private var showsPreferences = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            columns
+            Divider()
+            PeopleStrip(people: viewModel.currentPeople)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear {
+            Task {
+                await viewModel.requestCalendarAccessAndRefresh()
+            }
+            Task {
+                await viewModel.refreshMail()
+            }
+            viewModel.startAutoRefresh()
+        }
+        .onDisappear {
+            viewModel.stopAutoRefresh()
+        }
+        // A sheet rather than the popover this used to be: the gear it hung
+        // from is gone, and settings opened from a menu has nothing in the
+        // window to point at.
+        .sheet(isPresented: $viewModel.showsPreferences) {
+            PreferencesView(
+                current: viewModel.preferences,
+                calendars: viewModel.availableCalendars,
+                calendarSelection: viewModel.calendarSelection,
+                onCalendarSelectionChange: { viewModel.updateCalendarSelection($0) },
+                mailAccounts: viewModel.mailAccounts,
+                mailSelection: viewModel.mailSelection,
+                onMailSelectionChange: { viewModel.updateMailSelection($0) }
+            ) { updated in
+                viewModel.updatePreferences(updated)
+                viewModel.showsPreferences = false
+            }
+            .padding(20)
+            // A popover closed itself when you clicked away; a sheet has to
+            // be given a way out, and Escape has to work.
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    viewModel.showsPreferences = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .padding(10)
+            }
+        }
+    }
+
+    private var columns: some View {
         HStack(alignment: .top, spacing: 16) {
+            MailColumn(
+                messages: viewModel.visibleMailMessages,
+                summary: { viewModel.summary(for: $0) },
+                access: viewModel.mailAccess,
+                brief: viewModel.dayBrief,
+                briefFallback: viewModel.dayBriefFallback,
+                onRefresh: { Task { await viewModel.refreshMail() } },
+                onOpen: { MailLinks.open(messageID: $0.id) },
+                recommendedBlock: { viewModel.recommendedBlock(for: $0, minutes: $1) },
+                blockableDays: viewModel.blockableDays(),
+                blockStartTimes: { viewModel.blockStartTimes(on: $0, minutes: $1) },
+                onBlockTime: { viewModel.addFocusBlock(for: $0, slot: $1) },
+                onArchive: { message in Task { await viewModel.archive(message) } },
+                archiveProblem: viewModel.archiveProblem ?? viewModel.deferProblem,
+                deferralDate: { viewModel.deferralDate(for: $0) },
+                onDefer: { message, date in
+                    Task { await viewModel.deferMessage(message, until: date) }
+                },
+                onUndefer: { message in
+                    Task { await viewModel.undeferMessage(message) }
+                },
+                deferredCount: viewModel.deferredCount,
+                showsDeferred: $viewModel.showsDeferred
+            )
+
             chartColumn
 
             let editor = viewModel.dayEditor
@@ -35,50 +126,15 @@ struct ContentView: View {
             // its `onDisappear`.
             .id(editor.day)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear {
-            Task {
-                await viewModel.requestCalendarAccessAndRefresh()
-            }
-            viewModel.startAutoRefresh()
-        }
-        .onDisappear {
-            viewModel.stopAutoRefresh()
-        }
     }
 
     private var chartColumn: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                // Clear the traffic-light cluster on the hidden title bar.
-                Color.clear.frame(width: 56, height: 12)
-                if viewModel.isLoading {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                Spacer()
-                Button {
-                    showsPreferences = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showsPreferences) {
-                    PreferencesView(
-                        current: viewModel.preferences,
-                        calendars: viewModel.availableCalendars,
-                        calendarSelection: viewModel.calendarSelection,
-                        onCalendarSelectionChange: { viewModel.updateCalendarSelection($0) }
-                    ) { updated in
-                        viewModel.updatePreferences(updated)
-                        showsPreferences = false
-                    }
-                }
-            }
-
+        // No header row above the chart any more. It held the gear, which
+        // has moved to the app menu, and then held nothing but a spinner —
+        // and an empty row above one card and not the others is exactly the
+        // misalignment it was meant to prevent. The spinner now sits on the
+        // card it describes.
+        Group {
             // Read once and used for everything the chart shows — bars,
             // hours and the week's name. The week is derived from "now" on
             // each read, so separate reads either side of midnight would
@@ -121,6 +177,13 @@ struct ContentView: View {
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
+            .overlay(alignment: .topTrailing) {
+                if viewModel.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(12)
+                }
+            }
         }
     }
 }
