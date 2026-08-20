@@ -124,6 +124,15 @@ script failing:
 Message bodies are read into memory and never persisted; `MailSummaryStore`
 holds conclusions only.
 
+Which account is read is re-read from UserDefaults for every script rather than
+cached in a property: the picker writes it on the main thread and the script
+builders read it on `MailStore.queue`, and the visible form of that race is a
+fetch reading the mailbox you just switched away from. For the same reason
+`WorkHistoryViewModel.refreshMail` throws away a fetch whose answer arrives after
+the account changed, and queues a refresh asked for while one is running instead
+of dropping it — dropping it meant switching account left the column empty until
+the five-minute timer came round.
+
 Mail is read-only with **one** exception: `MailStore.archive` sets a message's
 `mailbox` to its account's Archive (Mail has no `archive` verb — its own button
 is a move too). Nothing sends, deletes, or marks mail read; keep it that way.
@@ -181,13 +190,27 @@ No subprocesses (that's why `pmset -g log` backfill was dropped), no
 Full Disk Access — reading `~/Library/Mail` directly would need it, which is why
 mail comes over Apple Events instead. Speech recognition is pinned to `requiresOnDeviceRecognition`;
 falling back to Apple's servers would break the app's stated promise and fail anyway
-without networking. EventKit is **read-mostly**: the one thing the app writes is a focus block
-(`CalendarStore.createFocusBlock`), created from a message in the inbox column.
-It creates events and never edits or deletes one, so nothing already in your
-calendar can be changed by it. Blocks are written with `availability = .free`,
-which is not a convention but the app's actual definition of "not a meeting" —
-`meetingEvents` filters free events out, so blocked focus time claims the slot
-in your diary without moving the meeting figures it was meant to reduce.
+without networking. EventKit is **read-mostly**: it writes exactly two things, and
+never *edits* an event, so an invitation's time, title or attendees can't be
+changed behind your back.
+
+- A focus block (`CalendarStore.createFocusBlock`), created from a message in the
+  inbox column. Blocks are written with `availability = .free`, which is not a
+  convention but the app's actual definition of "not a meeting" — `meetingEvents`
+  filters free events out, so blocked focus time claims the slot in your diary
+  without moving the meeting figures it was meant to reduce.
+- A deletion (`CalendarStore.delete`), from the meeting popover in the day panel,
+  behind a second confirmation. It finds the occurrence by day and start time
+  rather than by `event(withIdentifier:)`, which for a repeating meeting hands
+  back the series rather than the occurrence you were looking at.
+
+**There is no accept or decline, and there can't be.** No API a sandboxed app can
+reach answers an invitation: `EKParticipant.participantStatus` is read-only, and so
+is `participation status` in Calendar's own AppleScript dictionary. Sending the
+iTIP reply ourselves would need the network entitlement this app doesn't have, or
+an outgoing mail it will never send. So deleting a meeting is not declining it —
+the popover says so — and RSVP stays one click away in Calendar. Don't add two
+buttons that only pretend.
 
 ## AppKit workarounds worth knowing before "simplifying" them
 

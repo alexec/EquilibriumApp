@@ -202,10 +202,10 @@ final class CalendarStore {
 
     /// Puts a block of focus time in the calendar.
     ///
-    /// The only thing this app writes. Everything else it does with
-    /// EventKit is reading, and it stays that way — this creates events and
-    /// never edits or deletes one, so nothing already in your calendar can
-    /// be changed by it.
+    /// One of the two things this app writes, the other being `delete`.
+    /// Everything else it does with EventKit is reading, and it stays that
+    /// way — nothing here *edits* an event, so an invitation's time, title
+    /// or attendees can never be changed behind your back.
     ///
     /// **Marked as free, deliberately.** A block of your own focus time is
     /// not a meeting, and the app's own definition of a meeting is exactly
@@ -253,6 +253,98 @@ final class CalendarStore {
         return (fallback?.allowsContentModifications ?? false) ? fallback : nil
     }
 
+    // MARK: - Deleting an event
+
+    /// How much of a repeating meeting a delete takes with it.
+    ///
+    /// A thin wrapper on `EKSpan` so nothing above this file imports
+    /// EventKit — the same reason `SelectableCalendar` and `DayMeeting`
+    /// exist. Two cases and not three, because EventKit offers no "every
+    /// occurrence including the ones already past": Calendar's own menu
+    /// says "Delete This Event" and "Delete All Future Events", and this
+    /// is those.
+    enum DeletionScope {
+        case thisOccurrence
+        case thisAndLater
+
+        fileprivate var span: EKSpan {
+            switch self {
+            case .thisOccurrence: return .thisEvent
+            case .thisAndLater: return .futureEvents
+            }
+        }
+    }
+
+    /// How an attempt to delete one meeting ended. Named cases rather than
+    /// a `Bool`, for the reason `MailArchiveResult` has them: "that
+    /// calendar can't be written to" and "Calendar refused" send you to
+    /// completely different places, and a single false says neither.
+    enum DeleteResult: Equatable {
+        case deleted
+        /// It isn't there any more — already deleted, or moved in Calendar
+        /// while this panel was showing it.
+        case notFound
+        /// The event lives on a calendar you can only read: a subscribed
+        /// feed, a shared calendar you're an invitee on. Worth saying
+        /// rather than reporting a failure, because nothing you do in this
+        /// app will ever make that one deletable.
+        case readOnly
+        case failed
+    }
+
+    /// Removes a meeting from the calendar.
+    ///
+    /// The second and last thing this app writes, and the only destructive
+    /// one — which is why the popover that calls it asks twice.
+    ///
+    /// **It does not decline the invitation, and it can't.** EventKit has
+    /// no RSVP anywhere in it: `EKParticipant.participantStatus` is
+    /// read-only, and so is `participation status` in Calendar's own
+    /// AppleScript dictionary, so there is no supported way for any app
+    /// outside Calendar to answer an invitation. Sending the reply
+    /// ourselves isn't open either — this app has no network entitlement
+    /// and never sends mail. So deleting is deleting: the meeting leaves
+    /// your diary and stops counting against your day, and whoever called
+    /// it still has you down as coming. `MeetingActionPopover` says so on
+    /// the confirmation, because a silent no-show is a worse outcome than
+    /// a meeting left on the calendar.
+    func delete(eventIdentifier: String, startingAt start: Date, scope: DeletionScope) -> DeleteResult {
+        guard let event = occurrence(identifier: eventIdentifier, startingAt: start) else {
+            return .notFound
+        }
+        guard event.calendar?.allowsContentModifications == true else { return .readOnly }
+        do {
+            try store.remove(event, span: scope.span, commit: true)
+            return .deleted
+        } catch {
+            return .failed
+        }
+    }
+
+    /// The one occurrence that was on screen, found by day and start time.
+    ///
+    /// Deliberately not `event(withIdentifier:)`. Every occurrence of a
+    /// repeating meeting shares a single event identifier, and that call
+    /// hands back the series — so deleting "just this one" from a Thursday
+    /// standup would delete the Monday the series began on instead. A
+    /// date-bounded query returns the detached occurrence objects, and
+    /// matching the start time picks the right one out of them.
+    ///
+    /// The same query the rest of this class reads through, so a meeting
+    /// the app never showed you (all-day, marked free, on a calendar you
+    /// aren't reading) can't be deleted through it either.
+    private func occurrence(identifier: String, startingAt start: Date) -> EKEvent? {
+        meetingEvents(on: start).first { event in
+            guard event.eventIdentifier == identifier, let eventStart = event.startDate else {
+                return false
+            }
+            // Seconds, not equality: EventKit hands back dates rebuilt from
+            // the recurrence rule, and a sub-second difference from the one
+            // carried on the `DayMeeting` would silently match nothing.
+            return abs(eventStart.timeIntervalSince(start)) < 1
+        }
+    }
+
     /// Title-preserving meeting list for intention / check-in UI (not merged).
     func dayMeetings(on date: Date) -> [DayMeeting] {
         meetingEvents(on: date)
@@ -275,6 +367,7 @@ final class CalendarStore {
                     end: end,
                     joinURL: MeetingLinks.joinURL(for: event),
                     eventIdentifier: event.eventIdentifier,
+                    isRecurring: event.hasRecurrenceRules,
                     organizer: organizer,
                     participants: attendees
                         .compactMap(Person.init(participant:))

@@ -17,9 +17,30 @@ enum MailAccessState: Equatable {
     case unavailable
 }
 
+/// Which mailbox the inbox was actually read from.
+///
+/// The script falls back to Mail's unified inbox when the chosen account's
+/// inbox can't be opened, and that fallback used to be invisible: the
+/// column filled with mail from every account while preferences still said
+/// one had been picked. Reading *more* mail than was asked for is the one
+/// outcome this app should never do quietly — see `MailAccountSelection`
+/// on why the account is scoped in the script rather than filtered after —
+/// so the script now says which branch it took and the picker repeats it.
+enum MailScope: Equatable {
+    /// No account chosen; the unified inbox is the intended answer.
+    case allAccounts
+    /// The chosen account's own inbox, as asked.
+    case selectedAccount
+    /// An account was chosen and could not be opened, so every account was
+    /// read instead.
+    case fellBackToAllAccounts
+}
+
 /// Everything one trip to Mail brings back.
 struct MailFetch: Equatable {
     var messages: [MailMessage]
+    /// Where the messages came from, so the UI can admit to a fallback.
+    var scope: MailScope = .allAccounts
     /// Every address configured in Mail, lowercased. This is how "me" gets
     /// left out of the people strip: without it you are the person you
     /// interact with most, on every message you were ever sent.
@@ -103,16 +124,24 @@ final class MailStore {
     private let queue = DispatchQueue(label: "com.alexcollins.Equilibrium.mail", qos: .utility)
 
     /// Which account to read, or `nil` for Mail's unified inbox.
-    private var selectedAccountID: String?
+    ///
+    /// Read straight out of UserDefaults rather than cached in a stored
+    /// property, because the two sides of it are on different threads: the
+    /// picker in preferences writes from the main thread, and every script
+    /// this class builds reads on `queue`. A stored property would be a
+    /// plain data race, and the visible version of that race is worse than
+    /// the theoretical one — a fetch, an archive or a flag would use
+    /// whichever value happened to be in the field, which for something
+    /// whose entire job is "never read the other mailbox" is the one thing
+    /// it must not do. UserDefaults is thread-safe and this is read once
+    /// per script, so there is nothing to cache.
+    private var selectedAccountID: String? { MailAccountSelectionStore.load() }
 
-    private init() {
-        selectedAccountID = MailAccountSelectionStore.load()
-    }
+    private init() {}
 
     var selection: String? { selectedAccountID }
 
     func updateSelection(_ identifier: String?) {
-        selectedAccountID = identifier
         if let identifier {
             MailAccountSelectionStore.save(identifier)
         } else {
@@ -331,7 +360,20 @@ final class MailStore {
         var records = text.components(separatedBy: recordSeparator)
         guard !records.isEmpty else { return MailFetch(messages: [], myAddresses: []) }
 
-        // The first record is the account addresses, not a message.
+        // Two preamble records before the messages: which mailbox was read,
+        // then the account addresses. The scope leads because it is the one
+        // field that has to survive a fetch returning nothing — an empty
+        // inbox still has to be able to say it was the wrong inbox.
+        let scope: MailScope
+        switch records.removeFirst().trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "account": scope = .selectedAccount
+        case "fallback": scope = .fellBackToAllAccounts
+        default: scope = .allAccounts
+        }
+
+        guard !records.isEmpty else {
+            return MailFetch(messages: [], scope: scope, myAddresses: [])
+        }
         let myAddresses = Set(
             records.removeFirst()
                 .components(separatedBy: listSeparator)
@@ -342,6 +384,7 @@ final class MailStore {
         let messages = records.compactMap { parseMessage($0, myAddresses: myAddresses) }
         return MailFetch(
             messages: messages.sorted { $0.receivedAt > $1.receivedAt },
+            scope: scope,
             myAddresses: myAddresses
         )
     }
@@ -487,16 +530,21 @@ final class MailStore {
                 -- personal account that isn't selected is never read.
                 if accountID is "" then
                     set theBox to inbox
+                    set scopeNote to "all"
                 else
                     try
                         set theAccount to (first account whose id is accountID)
                         set theBox to mailbox "INBOX" of theAccount
+                        set scopeNote to "account"
                     on error
                         -- An account whose inbox isn't called INBOX, or one
                         -- that has been removed since it was picked. The
                         -- unified inbox is wrong but visible, which beats an
-                        -- empty column with no explanation.
+                        -- empty column with no explanation — but it is more
+                        -- mail than was asked for, so it is reported rather
+                        -- than passed off as the account's own inbox.
                         set theBox to inbox
+                        set scopeNote to "fallback"
                     end try
                 end if
 
@@ -506,11 +554,12 @@ final class MailStore {
                         set myAddresses to myAddresses & (email addresses of anAccount)
                     end try
                 end repeat
-                set out to my joinList(myAddresses, listSep)
+                set out to scopeNote & recordSep & my joinList(myAddresses, listSep)
 
                 set total to (count of messages of theBox)
                 if total > maxMessages then set total to maxMessages
                 if total is 0 then return out
+
 
                 -- The plural get has to be applied to the *specifier*, not
                 -- to a variable holding it: assigning `messages 1 thru n of

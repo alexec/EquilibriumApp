@@ -47,6 +47,7 @@ struct ContentView: View {
                 onCalendarSelectionChange: { viewModel.updateCalendarSelection($0) },
                 mailAccounts: viewModel.mailAccounts,
                 mailSelection: viewModel.mailSelection,
+                mailScope: viewModel.mailScope,
                 onMailSelectionChange: { viewModel.updateMailSelection($0) }
             ) { updated in
                 viewModel.updatePreferences(updated)
@@ -108,6 +109,10 @@ struct ContentView: View {
                 calendarAccess: viewModel.calendarAccess,
                 meetingGist: viewModel.meetingGist(for: editor.day),
                 initialFocus: editor.kind,
+                deleteProblem: viewModel.meetingDeleteProblem,
+                onDeleteMeeting: { meeting, scope in
+                    Task { await viewModel.deleteMeeting(meeting, scope: scope) }
+                },
                 // Nothing to dismiss and nothing to confirm: words are
                 // written as they're recognised, and the day's button
                 // filling in behind the panel is the confirmation.
