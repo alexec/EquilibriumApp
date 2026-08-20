@@ -7,6 +7,9 @@ struct ShiftTemplate: Codable, Equatable, Identifiable {
     enum Slot: String, Codable, CaseIterable {
         case morning, afternoon, evening
 
+        /// Reading order, and the order the day's shifts are kept in.
+        var order: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+
         var label: String {
             switch self {
             case .morning: return "Morning"
@@ -19,6 +22,42 @@ struct ShiftTemplate: Codable, Equatable, Identifiable {
     var slot: Slot
     var startHour: Double
     var endHour: Double
+
+    /// The hours a slot normally occupies, for a form offering one that
+    /// isn't currently worked.
+    static func standard(for slot: Slot) -> ShiftTemplate {
+        standard.first { $0.slot == slot } ?? ShiftTemplate(slot: slot, startHour: 9, endHour: 12)
+    }
+
+    /// Where a slot goes when it's switched back on: the hours it normally
+    /// occupies, pushed clear of anything already there and keeping its
+    /// usual length.
+    ///
+    /// The nudge matters because a schedule can have been migrated into
+    /// shapes the standard hours don't fit around — a legacy 10-to-2 day
+    /// arrives as a single morning running to 2pm, and the standard 1-to-5
+    /// afternoon would land on top of it. Two slots over each other are two
+    /// ghosts in the same place. Nil when the day has no room left for it,
+    /// in which case the box stays unticked, which is the truth.
+    static func placement(for slot: Slot, avoiding existing: [ShiftTemplate]) -> ShiftTemplate? {
+        var candidate = standard(for: slot)
+        let length = candidate.hours
+        // At most one nudge per slot already present, so a cycle of
+        // conflicts can't spin here.
+        for _ in 0...existing.count {
+            guard let clash = existing.first(where: {
+                candidate.startHour < $0.endHour && candidate.endHour > $0.startHour
+            }) else {
+                return candidate.endHour > candidate.startHour ? candidate : nil
+            }
+            // An hour clear of what it ran into, the same gap the standard
+            // slots leave between themselves.
+            candidate.startHour = clash.endHour + 1
+            candidate.endHour = min(candidate.startHour + length, 24)
+            guard candidate.startHour < 24 else { return nil }
+        }
+        return nil
+    }
 
     var id: Slot { slot }
     var hours: Double { max(0, endHour - startHour) }

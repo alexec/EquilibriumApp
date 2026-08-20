@@ -103,7 +103,9 @@ struct PreferencesView: View {
             }
         }
         .padding(16)
-        .frame(width: 300)
+        // Wide enough for a shift row: a checkbox, its slot's name, and two
+        // hour pickers with a word between them.
+        .frame(width: 340)
     }
 
     private func manualSection(explanation: String) -> some View {

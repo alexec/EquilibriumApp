@@ -111,13 +111,24 @@ struct DayBar: View {
             return offered
         }
 
-        return shiftTemplates.compactMap { template in
+        var offered: [GhostShift] = []
+        for template in shiftTemplates where template.endHour > template.startHour {
             let taken = shifts.contains { shift in
                 hourOfDay(shift.start) < template.endHour && hourOfDay(shift.end) > template.startHour
             }
-            guard !taken, template.endHour > template.startHour else { return nil }
-            return GhostShift(id: template.slot, startHour: template.startHour, endHour: template.endHour)
+            guard !taken else { continue }
+            // Two outlines drawn over each other are two click targets in
+            // the same place, and which one you get is whichever the hit
+            // test reaches first. The editor and the parser both keep the
+            // slots apart, but a schedule stored before they did needn't
+            // have, so the chart doesn't rely on it.
+            let overlapsOffered = offered.contains {
+                template.startHour < $0.endHour && template.endHour > $0.startHour
+            }
+            guard !overlapsOffered else { continue }
+            offered.append(GhostShift(id: template.slot, startHour: template.startHour, endHour: template.endHour))
         }
+        return offered
     }
 
     /// Hours since midnight on `day` — negative before it, past 24 after,
@@ -172,6 +183,7 @@ struct DayBar: View {
                         meeting: meeting,
                         chartHeight: chartHeight,
                         barWidth: barWidth,
+                        dayMidnight: calendar.startOfDay(for: day),
                         dayStart: clampStart,
                         dayEnd: clampEnd,
                         color: DayFire.meetingColor(intensity: fireIntensity),
@@ -212,6 +224,10 @@ private struct MeetingBlockView: View {
     let meeting: MeetingBlock
     let chartHeight: CGFloat
     let barWidth: CGFloat
+    /// Midnight at the top of the day this block belongs to, so a meeting
+    /// running to midnight reaches the bottom of the chart rather than
+    /// being read as the 00:00 that starts a day.
+    let dayMidnight: Date
     let dayStart: Date
     let dayEnd: Date
     let color: Color
@@ -251,8 +267,8 @@ private struct MeetingBlockView: View {
     }
 
     var body: some View {
-        let topOffset = CGFloat(ChartScale.fraction(of: displayedStart)) * chartHeight
-        let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd)) * chartHeight
+        let topOffset = CGFloat(ChartScale.fraction(of: displayedStart, onDayStarting: dayMidnight)) * chartHeight
+        let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd, onDayStarting: dayMidnight)) * chartHeight
         let height = max(bottomOffset - topOffset, Self.minBlockHeight)
 
         ZStack(alignment: .top) {
@@ -528,9 +544,14 @@ private struct ShiftLayerView: View {
         }
     }
 
+    /// Measured against this day rather than off the clock: a shift ending
+    /// at midnight is stored as the start of the next day, and read as a
+    /// time of day that's 00:00 — the top of the chart — which drew six
+    /// hours of evening work as a stub back at 6pm.
     private func shiftBounds(_ shift: WorkShift) -> (top: CGFloat, bottom: CGFloat) {
-        let top = CGFloat(ChartScale.fraction(of: shift.start)) * chartHeight
-        let bottom = CGFloat(ChartScale.fraction(of: shift.end)) * chartHeight
+        let midnight = Calendar.current.startOfDay(for: day)
+        let top = CGFloat(ChartScale.fraction(of: shift.start, onDayStarting: midnight)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: shift.end, onDayStarting: midnight)) * chartHeight
         return (top, max(bottom, top + minimumCapsuleHeight))
     }
 
