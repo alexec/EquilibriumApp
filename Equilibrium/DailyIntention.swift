@@ -56,6 +56,12 @@ struct DayMeeting: Identifiable, Equatable {
     /// EventKit's identifier for the event, so Calendar can be asked to
     /// show this one rather than just the day.
     var eventIdentifier: String?
+    /// Who called the meeting. Nil for an event you made yourself, which
+    /// EventKit leaves without an organiser.
+    var organizer: Person?
+    /// Everyone else invited, you and the organiser excluded — the `+n`
+    /// beside the title, and the secondary people in the strip below.
+    var participants: [Person] = []
 
     var durationMinutes: Int {
         max(0, Int(end.timeIntervalSince(start) / 60.0))

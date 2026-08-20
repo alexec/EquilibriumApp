@@ -12,6 +12,27 @@
 	     the alternative (write-only) cannot read events at all. -->
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
+	<!-- Apple Events, addressed to Mail and to nothing else.
+
+	     Mail's messages live in ~/Library/Mail, which is unreadable without
+	     Full Disk Access — a permission the user grants to the whole app in
+	     System Settings, covering every file on the Mac, to read one folder.
+	     That was rejected: it is a far larger ask than this app has any
+	     business making, and it would mean parsing .emlx, an undocumented
+	     format Apple changes between releases.
+
+	     Asking Mail itself is the narrow version of the same request. The
+	     temporary exception names one bundle id, so the grant macOS records
+	     is "Equilibrium may control Mail" and nothing else; the automation
+	     key is what the hardened runtime needs to send the event at all.
+	     This buys no network access, no file access, and no subprocess —
+	     NSAppleScript runs in this process. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.mail</string>
+	</array>
 	<!-- Microphone, for dictating intentions and check-ins. Recognition is
 	     pinned on-device, so the audio is transcribed here and never sent
 	     anywhere; the app still has no network entitlement at all. -->

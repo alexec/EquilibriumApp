@@ -48,8 +48,9 @@ IOKit power notifications → PowerNotificationMonitor → LiveEventStore (live-
                                               WorkdayCalculator.computeSpans
                                                             ↓
    EventKit (CalendarStore → MeetingCalculator) → WorkHistoryViewModel → WorkHistoryStore (history.json)
+   Mail (AppleScript → MailStore → MailSummaryGenerator) ↗    ↓   ↘ MailSummaryStore (mail-summaries.json)
                                                             ↓
-                                     ContentView → DailyBarChartView → DayBar, and DayDetailPanel
+                    ContentView → MailColumn, DailyBarChartView → DayBar, DayDetailPanel, PeopleStrip
 ```
 
 `WorkHistoryViewModel` (`@MainActor`, `ObservableObject`) is the single hub: it owns
@@ -61,10 +62,11 @@ Everything is keyed by **`dayKey` — `"yyyy-MM-dd"` in local time**: work spans
 intentions and LLM summaries all use it, and `WorkdaySpan.id`/`DailyIntention.id`
 are that key.
 
-State lives in three JSON files plus UserDefaults, all inside the sandbox container
+State lives in four JSON files plus UserDefaults, all inside the sandbox container
 `~/Library/Containers/com.alexcollins.Equilibrium/Data/Library/Application Support/WorkActivityTracker/`:
 `live-events.json` (raw power events), `history.json` (computed spans),
-`daily-intentions.json`. `WorkPreferences` and the notifier's "already fired this
+`daily-intentions.json`, and `mail-summaries.json` (one action line and due
+date per message id — **never a body or a subject**, 30-day prune). `WorkPreferences` and the notifier's "already fired this
 week" marker go in UserDefaults.
 
 ### Rules the data layer enforces
@@ -100,11 +102,50 @@ week" marker go in UserDefaults.
   written again — a legacy day becomes one shift, and a legacy 9–5 window becomes
   a morning and an afternoon with the lunch hour taken off the weekly target.
 
+## Reading Mail
+
+`MailStore` is the only thing that talks to Mail, over one `NSAppleScript` per
+fetch. Three things about it are load-bearing and were each learned by the
+script failing:
+
+- **No scripting additions, ever.** The sandbox refuses to load `.osax` bundles,
+  so `current date` and friends are unavailable — and inside a `tell application
+  "Mail"` block the unresolved command is sent to *Mail*, which never answers it,
+  killing the whole script with `-1712 AppleEvent timed out` before it reads
+  anything. "Now" is computed in Swift and interpolated in.
+- **Never run it on the main thread.** The first call is the one macOS puts the
+  Automation consent prompt in front of, and that prompt needs the main thread to
+  draw. Waiting for consent on the main thread deadlocks with no dialog visible.
+- **Plural gets need the specifier, not a variable holding it.** `set m to
+  messages 1 thru 40 of inbox` resolves to a list, and `subject of <list>` is
+  `-1728`. Repeating the range in each get is what keeps it to one Apple Event
+  per property instead of one per message.
+
+Message bodies are read into memory and never persisted; `MailSummaryStore`
+holds conclusions only.
+
+Mail is read-only with **one** exception: `MailStore.archive` sets a message's
+`mailbox` to its account's Archive (Mail has no `archive` verb — its own button
+is a move too). Nothing sends, deletes, or marks mail read; keep it that way.
+
+Deferring is **not** Mail's Remind Me: that feature isn't in the scripting
+dictionary at all — no command, no property — and the only message state Apple
+Events can write is read status, flags, junk status and mailbox. So a deferral
+is written to **Reminders** (`RemindersStore`), with the reminder's `url` set
+to the message's `message://` address; that URL is also how deferrals are read
+back, and how a reminder completed on a phone brings the message back here.
+The message is flagged in Mail as well, which is the only marker Apple Events
+can write that you'll see when you open Mail. Nothing about a deferral is
+stored by this app. `MailDeferral.isHidden` is the only rule: hidden while the
+deferral is on a *later day* than today, so anything due today is on screen.
+
 ## On-device LLM
 
-`FoundationModels` is used for three optional touches: the week header caption
-(`WeeklyInsightGenerator`), a day's meeting gist (`MeetingSummaryGenerator`), and
-free-text parsing of work preferences (`WorkPreferencesGenerator`).
+`FoundationModels` is used for optional touches: the week header caption
+(`WeeklyInsightGenerator`), a day's meeting gist (`MeetingSummaryGenerator`),
+free-text parsing of work preferences (`WorkPreferencesGenerator`), a per-message
+action line (`MailSummaryGenerator`) and the day brief above the inbox
+(`DayBriefGenerator`).
 
 - **Every feature needs a non-LLM path**, not an error message — most Macs can't run
   the model. See `WeekHeaderStats.fallbackSentence` and `WorkPreferencesForm`.
@@ -118,15 +159,35 @@ free-text parsing of work preferences (`WorkPreferencesGenerator`).
 - Generated text is validated before display, because the model does get it wrong:
   the week caption is discarded if it contradicts its own figures or runs long, and
   a meeting gist containing a digit is rejected. Keep that shape for new prompts.
+- **Put nothing quotable in a prompt.** Given example actions, the model returned
+  one word for word on three unrelated messages; given the list of verbs that
+  replaced them, it returned a bare verb on five in a row. `MailSummaryGenerator`
+  now names no phrase and no verb, sets a floor as well as a ceiling on length,
+  and checks the answer shares a real word with the message it describes.
+- **Cached generated text is versioned.** `MailSummaryGenerator.promptVersion` is
+  stored with each summary; bump it when the prompt or validation changes, or
+  `mail-summaries.json` serves lines written by a prompt that no longer exists.
+- Where a date is involved, the detector finds the candidates
+  (`MailDueDates`) and the model only picks one by number — same principle as
+  handing `WeeklyInsightGenerator` a worked-out comparison rather than two
+  numbers to subtract.
 
 ## Sandbox and privacy constraints
 
 App Sandbox is on and there is **no network entitlement** — don't add one, and don't
 add a dependency that needs it. Entitlements are exactly: sandbox, calendars,
-audio-input. No subprocesses (that's why `pmset -g log` backfill was dropped), no
-Full Disk Access. Speech recognition is pinned to `requiresOnDeviceRecognition`;
+audio-input, and Apple Events scoped by temporary exception to `com.apple.mail`.
+No subprocesses (that's why `pmset -g log` backfill was dropped), no
+Full Disk Access — reading `~/Library/Mail` directly would need it, which is why
+mail comes over Apple Events instead. Speech recognition is pinned to `requiresOnDeviceRecognition`;
 falling back to Apple's servers would break the app's stated promise and fail anyway
-without networking. EventKit is read-only in practice — the app never writes events.
+without networking. EventKit is **read-mostly**: the one thing the app writes is a focus block
+(`CalendarStore.createFocusBlock`), created from a message in the inbox column.
+It creates events and never edits or deletes one, so nothing already in your
+calendar can be changed by it. Blocks are written with `availability = .free`,
+which is not a convention but the app's actual definition of "not a meeting" —
+`meetingEvents` filters free events out, so blocked focus time claims the slot
+in your diary without moving the meeting figures it was meant to reduce.
 
 ## AppKit workarounds worth knowing before "simplifying" them
 

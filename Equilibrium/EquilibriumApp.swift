@@ -22,39 +22,59 @@ struct EquilibriumApp: App {
     }
 
     /// The day panel's contribution to the window's width. It's always on
-    /// screen, so this is a constant — the window is simply that much wider
-    /// than the chart it holds.
+    /// screen and holds text at a fixed, readable measure, so this is a
+    /// constant — the window is simply that much wider than the chart.
     private let panelWidth = DayDetailPanel.width + 16
 
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(viewModel: viewModel)
-                // Sized for seven day columns, not fourteen: at 420pt each
-                // column is ~44pt, comfortably more than the 28pt an 18pt
-                // bar and its workday track need. The ceiling is what
-                // shrinks windows macOS restores at the old two-week width —
-                // without it they'd stay needlessly wide, with the week's
-                // bars stranded far apart.
+                // Sized so the chart has room for seven day columns, and
+                // then left free to grow.
                 //
-                // Every bound carries the day panel's width on top of that,
-                // so resizing changes what the chart gets and leaves the
-                // panel alone — it holds text at a fixed, readable measure.
+                // Every bound carries the day panel's fixed width on top of
+                // what the chart and the inbox need, so resizing changes
+                // what those two get and leaves the panel alone.
+                //
+                // This used to pin both dimensions — one height, and a
+                // narrow band of widths — with a ceiling that existed to
+                // shrink windows macOS restored at an old, wider size. That
+                // was liveable with two columns and isn't with three: an
+                // inbox, a week and a day panel side by side want more room
+                // on a large display and less on a laptop, and which is
+                // which is the reader's call rather than this file's. The
+                // ceilings that remain are generous enough to be a guard
+                // against a restored window from another Mac rather than a
+                // limit anyone meets by dragging.
                 .frame(
-                    minWidth: 360 + panelWidth,
-                    idealWidth: 420 + panelWidth,
-                    maxWidth: 560 + panelWidth,
+                    minWidth: 340 + panelWidth + SideColumn.width + 16,
+                    idealWidth: 460 + panelWidth + SideColumn.width + 16,
+                    maxWidth: 1000 + panelWidth + SideColumn.width + 16,
                     // Tall enough that a day's summary and its three spoken
-                    // fields sit on screen together: the panel is permanent
-                    // furniture, and scrolling it to reach the check-in is
-                    // the thing this height buys off.
-                    minHeight: 600,
-                    maxHeight: 600
+                    // fields sit on screen together, with the people strip
+                    // below them. Extra height goes to the three columns,
+                    // which is what the inbox wants — more of it visible.
+                    minHeight: 560 + PeopleStrip.height,
+                    idealHeight: 600 + PeopleStrip.height + 24,
+                    maxHeight: 1400
                 )
                 .background(WindowChromeRemover())
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
         .commands {
+            // Settings belongs in the app menu, at ⌘,, which is where every
+            // Mac user already looks for it. It used to be a gear in the
+            // window's top corner — one more thing competing for attention
+            // in a window that now holds an inbox, a week and a day.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    viewModel.showsPreferences = true
+                    MainWindow.present { }
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
             // Replaces the default "About Equilibrium" item with one that
             // opens the standard panel but with our "why I built this"
             // story as its credits text, instead of a custom in-window
