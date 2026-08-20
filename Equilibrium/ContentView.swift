@@ -97,11 +97,10 @@ struct ContentView: View {
                 canShowNextWeek: viewModel.canShowNextWeek,
                 onShowPreviousWeek: { viewModel.showPreviousWeek() },
                 onShowNextWeek: { viewModel.showNextWeek() },
-                intention: { day in viewModel.intention(for: day) },
                 selection: viewModel.dayEditor,
-                onSelectDay: { day, kind in
+                onSelectDay: { day in
                     withAnimation(.easeInOut(duration: 0.2)) {
-                        viewModel.selectDay(day, kind: kind)
+                        viewModel.selectDay(day)
                     }
                 },
                 onMeetingChange: { day, meetingID, newStart, newEnd in

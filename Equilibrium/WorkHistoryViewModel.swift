@@ -736,6 +736,15 @@ final class WorkHistoryViewModel: ObservableObject {
     }
 
     /// Points the panel at `day`, focused on one of its two sections.
+    /// Open a day in the panel without saying which of its two halves is
+    /// wanted. The chart asks this way: a column names a day, and with the
+    /// sun and moon gone there's nothing in it that names a section — so
+    /// whichever the panel was focused on stays focused as you move along
+    /// the week.
+    func selectDay(_ day: Date) {
+        selectDay(day, kind: dayEditor.kind)
+    }
+
     func selectDay(_ day: Date, kind: DailyPromptKind) {
         dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
         refreshMeetingGist()
