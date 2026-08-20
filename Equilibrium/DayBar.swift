@@ -762,17 +762,26 @@ private struct ShiftLayerView: View {
     /// Wall-clock, like `ChartScale.fraction(of:)` that it inverts — set as
     /// an hour component rather than added as an interval, so a shift drawn
     /// at 9am on the day the clocks go forward is at 9am and not 10.
+    ///
+    /// Rounded to whole minutes *before* being split into hour and minute,
+    /// the same way `DailyIntentionNotifier` has to: rounding the
+    /// fractional part on its own gives 60 for anything within half a
+    /// minute of the next hour, and minute 60 matches no date at all. That
+    /// returned nil and fell back to midnight at the *top* of the day, so a
+    /// drag ending just shy of an hour produced a time before its own
+    /// start and was thrown away as inverted — the drag simply did nothing.
     private func date(atHour hour: Double) -> Date {
         let calendar = Calendar.current
         let midnight = calendar.startOfDay(for: day)
-        // 24 is no hour of this day; it's the start of the next one, which
-        // `bySettingHour:` can't express.
-        guard hour < 24 else {
+        let totalMinutes = min(max(Int((hour * 60).rounded()), 0), 24 * 60)
+        // Midnight is no hour of this day; it's the start of the next one,
+        // which `bySettingHour:` can't express.
+        guard totalMinutes < 24 * 60 else {
             return calendar.date(byAdding: .day, value: 1, to: midnight) ?? midnight
         }
-        let hourPart = Int(hour)
-        let minutePart = Int(((hour - Double(hourPart)) * 60).rounded())
-        return calendar.date(bySettingHour: hourPart, minute: minutePart, second: 0, of: midnight) ?? midnight
+        return calendar.date(
+            bySettingHour: totalMinutes / 60, minute: totalMinutes % 60, second: 0, of: midnight
+        ) ?? midnight
     }
 
     /// Rounds to the nearest 15 minutes — coarser than a meeting's 5, since

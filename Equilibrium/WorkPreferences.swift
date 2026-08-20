@@ -72,18 +72,35 @@ struct WorkPreferences: Codable, Equatable {
     /// Rounds and clamps everything to what the editor can represent, and
     /// drops any shift that can't be drawn. Applied to whatever the
     /// on-device model produces before it becomes settings.
-    ///
-    /// Bad shifts are dropped rather than repaired, since there's no
-    /// telling which of the two hours the model meant; a schedule left with
-    /// none at all falls back to the standard three.
     func sanitized() -> WorkPreferences {
         var copy = self
         copy.weeklyTargetHours = weeklyTargetHours.rounded().clamped(to: Self.weeklyTargetRange)
         copy.targetMeetingHoursPerDay = targetMeetingHoursPerDay.map(Self.roundedDailyHours)
         copy.targetFocusHoursPerDay = targetFocusHoursPerDay.map(Self.roundedDailyHours)
-        let usable = shifts.filter { $0.endHour > $0.startHour && $0.startHour >= 0 && $0.endHour <= 24 }
-        copy.shifts = usable.isEmpty ? ShiftTemplate.standard : usable
+        copy.shifts = Self.usableShifts(from: shifts)
         return copy
+    }
+
+    /// Shift hours rounded to the whole hours the editor's pickers offer —
+    /// they tag whole hours, so a half past nine matches no option and
+    /// leaves the control blank — and then dropped if the rounding left
+    /// nothing to draw, or if the slot runs into one already taken.
+    ///
+    /// Dropped rather than repaired, since there's no telling which of the
+    /// two hours was meant; a schedule left with none at all falls back to
+    /// the standard three. Overlap matters as well as order: two ghosts
+    /// drawn over each other are two click targets in the same place, and
+    /// the one you get is whichever the hit test reaches first.
+    private static func usableShifts(from shifts: [ShiftTemplate]) -> [ShiftTemplate] {
+        var kept: [ShiftTemplate] = []
+        for shift in shifts {
+            let start = shift.startHour.rounded().clamped(to: 0...23)
+            let end = shift.endHour.rounded().clamped(to: 1...24)
+            guard end > start else { continue }
+            guard !kept.contains(where: { start < $0.endHour && end > $0.startHour }) else { continue }
+            kept.append(ShiftTemplate(slot: shift.slot, startHour: start, endHour: end))
+        }
+        return kept.isEmpty ? ShiftTemplate.standard : kept
     }
 
     private static func roundedDailyHours(_ hours: Double) -> Double {
@@ -205,15 +222,19 @@ struct WorkPreferences: Codable, Equatable {
                 legacyWeeklyTargetHours
             )
         }
-        let eveningStart = min(legacyEndHour + 1, 23)
-        return (
-            [
-                ShiftTemplate(slot: .morning, startHour: legacyStartHour, endHour: legacyStartHour + 3),
-                ShiftTemplate(slot: .afternoon, startHour: legacyStartHour + 4, endHour: legacyEndHour),
-                ShiftTemplate(slot: .evening, startHour: eveningStart, endHour: min(eveningStart + 4, 24)),
-            ],
-            max(legacyWeeklyTargetHours - 5, 5)
-        )
+        var shifts = [
+            ShiftTemplate(slot: .morning, startHour: legacyStartHour, endHour: legacyStartHour + 3),
+            ShiftTemplate(slot: .afternoon, startHour: legacyStartHour + 4, endHour: legacyEndHour),
+        ]
+        // Only where the day leaves room for one after it. Clamping an
+        // evening slot backwards to fit — a window ending at midnight would
+        // have taken 11pm — put it on top of the afternoon, and two ghosts
+        // drawn over each other are two click targets in the same place.
+        let eveningStart = legacyEndHour + 1
+        if eveningStart < 24 {
+            shifts.append(ShiftTemplate(slot: .evening, startHour: eveningStart, endHour: min(eveningStart + 4, 24)))
+        }
+        return (shifts, max(legacyWeeklyTargetHours - 5, 5))
     }
 }
 
