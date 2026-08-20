@@ -60,6 +60,11 @@ struct DayDetailPanel: View {
     /// one. Never load-bearing: the count and hours are computed.
     let meetingGist: String?
     let initialFocus: DailyPromptKind
+    /// Why the last attempt to delete a meeting didn't happen.
+    let deleteProblem: String?
+    /// Removes a meeting from the calendar. Not a decline — see
+    /// `MeetingActionPopover`.
+    let onDeleteMeeting: (DayMeeting, CalendarStore.DeletionScope) -> Void
     let onSave: (String, String, String) -> Void
 
     @State private var goals: String
@@ -91,6 +96,8 @@ struct DayDetailPanel: View {
         calendarAccess: CalendarAccessState,
         meetingGist: String?,
         initialFocus: DailyPromptKind,
+        deleteProblem: String?,
+        onDeleteMeeting: @escaping (DayMeeting, CalendarStore.DeletionScope) -> Void,
         onSave: @escaping (String, String, String) -> Void
     ) {
         self.day = day
@@ -100,6 +107,8 @@ struct DayDetailPanel: View {
         self.calendarAccess = calendarAccess
         self.meetingGist = meetingGist
         self.initialFocus = initialFocus
+        self.deleteProblem = deleteProblem
+        self.onDeleteMeeting = onDeleteMeeting
         self.onSave = onSave
         _goals = State(initialValue: existing?.goals ?? "")
         _outcomes = State(initialValue: existing?.outcomes ?? "")
@@ -313,6 +322,20 @@ struct DayDetailPanel: View {
                     )
                 }
             }
+
+            // Said under the whole section rather than inside the popover
+            // that asked for the delete, because by the time there's an
+            // answer that popover has closed — and a delete that didn't
+            // happen has to be visible somewhere, or the meeting looks like
+            // it stayed put for no reason. Outside the list, too, so a
+            // refusal doesn't vanish with the rows when the day folds itself
+            // away behind "Show all".
+            if let deleteProblem {
+                Text(deleteProblem)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -394,7 +417,12 @@ struct DayDetailPanel: View {
     private var meetingRows: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(meetings) { meeting in
-                MeetingRow(meeting: meeting, day: day, host: meetingHost(meeting))
+                MeetingRow(
+                    meeting: meeting,
+                    day: day,
+                    host: meetingHost(meeting),
+                    onDelete: onDeleteMeeting
+                )
             }
         }
     }
@@ -494,6 +522,7 @@ private struct MeetingRow: View {
     /// Who to name on the row — organiser where there is one. See
     /// `DayDetailPanel.meetingHost`.
     let host: (primary: Person, others: [Person])?
+    let onDelete: (DayMeeting, CalendarStore.DeletionScope) -> Void
 
     @State private var isHovering = false
     @State private var showsActions = false
@@ -549,6 +578,15 @@ private struct MeetingRow: View {
                 },
                 onOpenInCalendar: {
                     MeetingLinks.showInCalendar(identifier: meeting.eventIdentifier, on: day)
+                    showsActions = false
+                },
+                onDelete: { scope in
+                    onDelete(meeting, scope)
+                    // Closed on the way out rather than left open on a row
+                    // that is about to disappear: the refresh behind this
+                    // rebuilds the list, and a popover anchored to a row
+                    // that no longer exists has nowhere to point. A refusal
+                    // is reported by the panel underneath instead.
                     showsActions = false
                 }
             )

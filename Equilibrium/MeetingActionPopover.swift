@@ -12,33 +12,106 @@ import SwiftUI
 ///
 /// Joining comes first because it's the one with a clock on it. Opening
 /// Calendar is what you do when the row hasn't told you enough, which the
-/// attendee list below usually has.
+/// attendee list below usually has, and deleting is last because it's the
+/// only one that can't be taken back.
+///
+/// **There is no Accept or Decline here, and there can't be.** No API this
+/// app can reach answers an invitation — `EKParticipant.participantStatus`
+/// is read-only, so is Calendar's scripted `participation status`, and
+/// sending the reply ourselves would need either the network entitlement
+/// this app doesn't have or an outgoing mail it will never send. Rather
+/// than offer two buttons that only pretend, RSVP stays where it works:
+/// "Open in Calendar" is one click from the accept and decline buttons on
+/// the invitation itself.
+///
+/// One popover with pages, like `MailActionPopover`: confirming a delete
+/// replaces this panel's contents rather than stacking a second popover on
+/// top of the first.
 struct MeetingActionPopover: View {
     let meeting: DayMeeting
     let day: Date
     let onJoin: (URL) -> Void
     let onOpenInCalendar: () -> Void
+    let onDelete: (CalendarStore.DeletionScope) -> Void
+
+    private enum Page {
+        case actions
+        case deleting
+    }
+
+    @State private var page: Page = .actions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading
 
-            VStack(spacing: 4) {
-                if let joinURL = meeting.joinURL {
-                    action("Join the call", symbol: "video.fill") { onJoin(joinURL) }
-                }
-                action("Open in Calendar", symbol: "calendar", onOpenInCalendar)
+            switch page {
+            case .actions: actions
+            case .deleting: deleting
             }
         }
         .padding(16)
         .frame(width: 300)
+        // Back to the list of actions whenever this closes. Without it the
+        // confirmation is sticky: dismiss the panel while it's asking, open
+        // the same meeting again, and the first thing under your cursor is
+        // "Yes, delete it" — which is not where a destructive action should
+        // start.
+        .onDisappear { page = .actions }
+    }
+
+    private var actions: some View {
+        VStack(spacing: 4) {
+            if let joinURL = meeting.joinURL {
+                action("Join the call", symbol: "video.fill") { onJoin(joinURL) }
+            }
+            action("Open in Calendar", symbol: "calendar", onOpenInCalendar)
+            action("Delete from Calendar", symbol: "trash") { page = .deleting }
+        }
+    }
+
+    /// The second ask. Deleting a meeting is the one irreversible thing
+    /// this app does to something it didn't create, and for a repeating
+    /// meeting the choice underneath is a real one — so the confirmation
+    /// isn't a yes/no, it's which of them you meant.
+    private var deleting: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if meeting.isRecurring {
+                action("Delete just this one", symbol: "trash", tint: .red) { onDelete(.thisOccurrence) }
+                action("Delete this and every later one", symbol: "trash", tint: .red) {
+                    onDelete(.thisAndLater)
+                }
+            } else {
+                action("Yes, delete it", symbol: "trash", tint: .red) { onDelete(.thisOccurrence) }
+            }
+
+            // The thing people would otherwise assume. Deleting an
+            // invitation looks like declining it and isn't: the organiser
+            // has no way of hearing about this, so a meeting you quietly
+            // remove is one you're expected at.
+            Text(meeting.organizer == nil
+                ? "This can't be undone."
+                : "This can't be undone, and it doesn't decline the invitation — the organiser won't be told. Open it in Calendar to reply.")
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var heading: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(MeetingTimeFormat.rangeLabel(start: meeting.start, end: meeting.end))
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                if page != .actions {
+                    Button("Back") { page = .actions }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
 
             Text(meeting.title)
                 .font(.system(size: 13, weight: .medium))
@@ -99,9 +172,13 @@ struct MeetingActionPopover: View {
         return [organizer] + meeting.participants.filter { $0 != organizer }
     }
 
+    /// One decision: a word, an icon, and the whole width of the panel to
+    /// hit it with. Coloured only where it destroys something, so red on
+    /// this panel means exactly one thing.
     private func action(
         _ title: String,
         symbol: String,
+        tint: Color = .primary,
         _ perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
@@ -113,6 +190,7 @@ struct MeetingActionPopover: View {
                     .font(.system(size: 12))
                 Spacer(minLength: 0)
             }
+            .foregroundStyle(tint)
             .padding(.horizontal, 8)
             .padding(.vertical, 7)
             .contentShape(RoundedRectangle(cornerRadius: 6))
