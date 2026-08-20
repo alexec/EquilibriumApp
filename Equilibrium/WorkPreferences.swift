@@ -1,13 +1,48 @@
 import Foundation
 
+/// One of the three slots a day's work can sit in, and the hours it
+/// normally occupies. These are what the chart draws as ghosts — outlines
+/// you click to put a real shift there.
+struct ShiftTemplate: Codable, Equatable, Identifiable {
+    enum Slot: String, Codable, CaseIterable {
+        case morning, afternoon, evening
+
+        var label: String {
+            switch self {
+            case .morning: return "Morning"
+            case .afternoon: return "Afternoon"
+            case .evening: return "Evening"
+            }
+        }
+    }
+
+    var slot: Slot
+    var startHour: Double
+    var endHour: Double
+
+    var id: Slot { slot }
+    var hours: Double { max(0, endHour - startHour) }
+
+    /// 9–12, 1–5, 6–10. Two of those make the seven-hour day the weekly
+    /// target is built from; the evening is there for the days you work it.
+    static let standard: [ShiftTemplate] = [
+        ShiftTemplate(slot: .morning, startHour: 9, endHour: 12),
+        ShiftTemplate(slot: .afternoon, startHour: 13, endHour: 17),
+        ShiftTemplate(slot: .evening, startHour: 18, endHour: 22),
+    ]
+}
+
 /// The user's configured work-schedule preferences — either set manually or
 /// parsed from a free-text description via the on-device LLM (see
 /// `WorkPreferencesGenerator`). Drives `WorkloadRecommender`'s weekly
-/// target and the "workday track" drawn on each day's bar.
+/// target and the ghost shifts drawn on each day's bar.
 struct WorkPreferences: Codable, Equatable {
-    var weeklyTargetHours: Double = 40
-    var workdayStartHour: Double = 9
-    var workdayEndHour: Double = 17
+    /// Seven hours a weekday. Seven rather than eight because lunch is no
+    /// longer inside the number: the day is 9–12 and 1–5, and the hour
+    /// between them is a gap rather than worked time that gets subtracted
+    /// again later.
+    var weeklyTargetHours: Double = 35
+    var shifts: [ShiftTemplate] = ShiftTemplate.standard
     /// Desired meetings/day, if the person expressed one. Not yet consumed
     /// anywhere in the UI beyond being stored and shown back in the
     /// preferences editor — a natural follow-up would be comparing it
@@ -19,15 +54,37 @@ struct WorkPreferences: Codable, Equatable {
 
     static let `default` = WorkPreferences()
 
+    /// When the day starts: the first shift's start. What the morning
+    /// intention reminder is scheduled against.
+    var workdayStartHour: Double {
+        shifts.first?.startHour ?? 9
+    }
+
+    /// When the day is done — not the last shift's end, but wherever the
+    /// day's share of the weekly target runs out, filling the shifts in
+    /// order. At the default settings that's seven hours: three in the
+    /// morning, four in the afternoon, finishing at 5pm, with the evening
+    /// shift left where it belongs, unasked for.
+    var workdayEndHour: Double {
+        var remaining = weeklyTargetHours / 5
+        for shift in shifts {
+            if remaining <= shift.hours {
+                return shift.startHour + max(remaining, 0)
+            }
+            remaining -= shift.hours
+        }
+        return shifts.last?.endHour ?? 17
+    }
+
     /// A plain-English sentence describing these settings, generated from
     /// the struct's fields — this is what `PreferencesView` shows in place
     /// of a form of Steppers, mirroring the free-text description that
     /// produced it (or that it defaults to before you've described one).
     var summarySentence: String {
-        var parts = [
-            "\(HoursFormat.string(weeklyTargetHours))/week",
-            "\(Self.clockLabel(workdayStartHour))–\(Self.clockLabel(workdayEndHour))",
-        ]
+        var parts = ["\(HoursFormat.string(weeklyTargetHours))/week"]
+        parts.append(contentsOf: shifts.map {
+            "\(Self.clockLabel($0.startHour))–\(Self.clockLabel($0.endHour))"
+        })
         if let targetMeetingHoursPerDay {
             parts.append("\(HoursFormat.string(targetMeetingHoursPerDay)) meetings/day")
         }
@@ -44,6 +101,83 @@ struct WorkPreferences: Codable, Equatable {
         let period = hour < 12 || hour == 24 ? "am" : "pm"
         let displayHour = hour == 0 || hour == 24 ? 12 : (hour > 12 ? hour - 12 : hour)
         return "\(Int(displayHour))\(period)"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case weeklyTargetHours, shifts, targetMeetingHoursPerDay, targetFocusHoursPerDay
+        /// Pre-shift settings: one unbroken window, lunch included.
+        case workdayStartHour, workdayEndHour
+    }
+
+    init(
+        weeklyTargetHours: Double = 35,
+        shifts: [ShiftTemplate] = ShiftTemplate.standard,
+        targetMeetingHoursPerDay: Double? = nil,
+        targetFocusHoursPerDay: Double? = nil
+    ) {
+        self.weeklyTargetHours = weeklyTargetHours
+        self.shifts = shifts
+        self.targetMeetingHoursPerDay = targetMeetingHoursPerDay
+        self.targetFocusHoursPerDay = targetFocusHoursPerDay
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(weeklyTargetHours, forKey: .weeklyTargetHours)
+        try container.encode(shifts, forKey: .shifts)
+        try container.encodeIfPresent(targetMeetingHoursPerDay, forKey: .targetMeetingHoursPerDay)
+        try container.encodeIfPresent(targetFocusHoursPerDay, forKey: .targetFocusHoursPerDay)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        targetMeetingHoursPerDay = try container.decodeIfPresent(Double.self, forKey: .targetMeetingHoursPerDay)
+        targetFocusHoursPerDay = try container.decodeIfPresent(Double.self, forKey: .targetFocusHoursPerDay)
+        let storedTarget = try container.decodeIfPresent(Double.self, forKey: .weeklyTargetHours) ?? 35
+
+        if let stored = try container.decodeIfPresent([ShiftTemplate].self, forKey: .shifts), !stored.isEmpty {
+            shifts = stored
+            weeklyTargetHours = storedTarget
+            return
+        }
+
+        // Settings written before shifts existed. Their one window becomes
+        // a morning and an afternoon with an hour between, keeping the start
+        // and end they chose, and an evening slot is offered after it.
+        let legacyStart = try container.decodeIfPresent(Double.self, forKey: .workdayStartHour) ?? 9
+        let legacyEnd = try container.decodeIfPresent(Double.self, forKey: .workdayEndHour) ?? 17
+        (shifts, weeklyTargetHours) = Self.migrated(
+            legacyStartHour: legacyStart,
+            legacyEndHour: legacyEnd,
+            legacyWeeklyTargetHours: storedTarget
+        )
+    }
+
+    /// Turns a pre-shift window into shifts. The target comes down by an
+    /// hour a day, because that hour is lunch and the figure used to
+    /// include it — the same reason the standard day is seven hours and not
+    /// eight. A window too short to hold a lunch break is left as one shift
+    /// with its target untouched.
+    static func migrated(
+        legacyStartHour: Double,
+        legacyEndHour: Double,
+        legacyWeeklyTargetHours: Double
+    ) -> (shifts: [ShiftTemplate], weeklyTargetHours: Double) {
+        guard legacyEndHour - legacyStartHour >= 5 else {
+            return (
+                [ShiftTemplate(slot: .morning, startHour: legacyStartHour, endHour: legacyEndHour)],
+                legacyWeeklyTargetHours
+            )
+        }
+        let eveningStart = min(legacyEndHour + 1, 23)
+        return (
+            [
+                ShiftTemplate(slot: .morning, startHour: legacyStartHour, endHour: legacyStartHour + 3),
+                ShiftTemplate(slot: .afternoon, startHour: legacyStartHour + 4, endHour: legacyEndHour),
+                ShiftTemplate(slot: .evening, startHour: eveningStart, endHour: min(eveningStart + 4, 24)),
+            ],
+            max(legacyWeeklyTargetHours - 5, 5)
+        )
     }
 }
 

@@ -282,7 +282,7 @@ final class WorkHistoryViewModel: ObservableObject {
 
             // Clip to the workday only when one was actually tracked;
             // a zero-hour day would clip every meeting away to nothing.
-            let hasWorkday = span.hours > 0
+            let hasWorkday = !span.shifts.isEmpty
             let events = hasWorkday
                 ? CalendarStore.shared.meetingEvents(on: date, span: span)
                 : CalendarStore.shared.meetingEvents(on: date)
@@ -315,7 +315,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // even when there's no workday yet (start == end → 0h placeholder).
         for date in currentWeekDays() where date >= today {
             let key = dayKey(for: date)
-            if let existing = updated[key], existing.hours > 0 { continue }
+            if let existing = updated[key], !existing.shifts.isEmpty { continue }
             if let existing = updated[key], existing.meetingsManuallyEdited { continue }
 
             let events = CalendarStore.shared.meetingEvents(on: date)
@@ -323,13 +323,13 @@ final class WorkHistoryViewModel: ObservableObject {
             // Don't invent empty history rows for days with nothing on the
             // calendar; drop a prior 0h holder once its meetings clear.
             if meetings.isEmpty {
-                if let existing = updated[key], existing.hours == 0, !existing.isManual {
+                if let existing = updated[key], existing.shifts.isEmpty, !existing.isManual {
                     updated.removeValue(forKey: key)
                 }
                 continue
             }
 
-            var span = updated[key] ?? WorkdaySpan(dayKey: key, start: date, end: date)
+            var span = updated[key] ?? WorkdaySpan(dayKey: key)
             span.meetings = meetings
             span.hasCalendarData = true
             updated[key] = span
@@ -348,7 +348,7 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Drag-clamp bounds for a meeting: the workday when one exists,
     /// otherwise the chart's 6am–midnight window for that calendar day.
     private func meetingClampBounds(for span: WorkdaySpan, on date: Date) -> (Date, Date) {
-        if span.hours > 0 {
+        if !span.shifts.isEmpty {
             return (span.start, span.end)
         }
         let startOfDay = calendar.startOfDay(for: date)
@@ -377,28 +377,75 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Permanently blanks out a day's hours (0h), protected like any other
     /// manual override so automatic refreshes never repopulate it.
     func deleteHours(for date: Date) {
-        let span = WorkdaySpan(dayKey: dayKey(for: date), start: date, end: date, isManual: true)
+        let span = WorkdaySpan(dayKey: dayKey(for: date), isManual: true)
         spansByDay = store.setManualSpan(span)
         refreshWeekHeaderSummaries()
     }
 
-    /// Creates or edits a day's workday span — from dragging its top edge
-    /// (start), bottom edge (end), or middle (move) on the day bar, or
-    /// drawing a brand-new one on a day with no data yet. Marks the day
-    /// `isManual` (the same flag that already protects hand-set spans from
-    /// automatic wake/sleep recompute) so this sticks. Existing meetings/
-    /// break data on the day are preserved; if calendar access is granted
-    /// and the day's meetings haven't been hand-edited, they're refetched
-    /// immediately against the new span rather than waiting for the next
-    /// auto-refresh.
-    func updateWorkday(for date: Date, newStart: Date, newEnd: Date) {
+    /// Adds a shift to a day — from clicking one of its ghost outlines, or
+    /// drawing one from scratch on the column. A shift that touches or
+    /// overlaps one already there merges with it rather than becoming a
+    /// fourth block; a day already holding `ShiftPlan.maximumShifts`
+    /// separate shifts takes no more.
+    func addShift(for date: Date, start: Date, end: Date) {
+        guard start < end else { return }
+        let existing = spansByDay[dayKey(for: date)]?.shifts ?? []
+        let touchesExisting = existing.contains { $0.start <= end && $0.end >= start }
+        guard touchesExisting || existing.count < ShiftPlan.maximumShifts else { return }
+        setShifts(for: date, existing + [WorkShift(start: start, end: end)])
+    }
+
+    /// Reshapes one shift — from dragging its top edge (start), bottom edge
+    /// (end), or middle (move) on the day bar. Dragged onto a neighbour,
+    /// the two come back as one.
+    func updateShift(for date: Date, shiftID: UUID, start: Date, end: Date) {
+        guard start < end else { return }
+        guard let span = spansByDay[dayKey(for: date)] else { return }
+        guard span.shifts.contains(where: { $0.id == shiftID }) else { return }
+        setShifts(for: date, span.shifts.map { shift in
+            shift.id == shiftID ? WorkShift(id: shift.id, start: start, end: end) : shift
+        })
+    }
+
+    /// Removes one shift, leaving the rest of the day alone — the ghost
+    /// that outline came from reappears in its place.
+    func removeShift(for date: Date, shiftID: UUID) {
+        guard let span = spansByDay[dayKey(for: date)] else { return }
+        setShifts(for: date, span.shifts.filter { $0.id != shiftID })
+    }
+
+    /// The one way a day's shifts are written. Normalises them (sorted,
+    /// merged on contact, folded to at most three), then marks the day
+    /// `isManual` — the same flag that already protects hand-set days from
+    /// automatic wake/sleep recompute — so the edit sticks.
+    ///
+    /// Auto-detected break minutes are dropped: once the shifts are set by
+    /// hand they say where the breaks were, and a figure measured against
+    /// the day's earlier shape would go on being deducted from a day that
+    /// no longer has that shape. What `normalize` had to fold back in is
+    /// kept, since that time really is inside a shift without having been
+    /// worked.
+    ///
+    /// Meetings are refetched immediately against the new shape when
+    /// calendar access is granted and they haven't been hand-edited, rather
+    /// than waiting for the next auto-refresh.
+    private func setShifts(for date: Date, _ shifts: [WorkShift]) {
         let key = dayKey(for: date)
-        var span = spansByDay[key] ?? WorkdaySpan(dayKey: key, start: newStart, end: newEnd)
-        span.start = newStart
-        span.end = newEnd
+        var span = spansByDay[key] ?? WorkdaySpan(dayKey: key)
+        let (normalized, absorbedGapMinutes) = ShiftPlan.normalize(shifts)
+        span.shifts = normalized
+        span.breakMinutes = 0
+        span.intraBreakMinutes = absorbedGapMinutes
         if calendarAccessGranted, !span.meetingsManuallyEdited {
-            let events = CalendarStore.shared.meetingEvents(on: date, span: span)
-            span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            // Clipping only applies where there's something to clip to:
+            // through the last shift being removed, the day still shows the
+            // meetings it holds rather than losing them to an empty window.
+            if span.shifts.isEmpty {
+                span.meetings = MeetingCalculator.mergedBlocks(from: CalendarStore.shared.meetingEvents(on: date))
+            } else {
+                let events = CalendarStore.shared.meetingEvents(on: date, span: span)
+                span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
+            }
             span.hasCalendarData = true
         }
         spansByDay = store.setManualSpan(span)
@@ -434,7 +481,7 @@ final class WorkHistoryViewModel: ObservableObject {
         let key = dayKey(for: date)
         guard var span = spansByDay[key] else { return }
         span.meetingsManuallyEdited = false
-        if span.hours > 0 {
+        if !span.shifts.isEmpty {
             let events = CalendarStore.shared.meetingEvents(on: date, span: span)
             span.meetings = MeetingCalculator.mergedBlocks(from: events, clippedTo: span)
         } else {

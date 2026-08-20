@@ -22,26 +22,34 @@ private struct WindowDragBlocker: NSViewRepresentable {
 }
 #endif
 
-/// A single day's vertical bar: renders actual worked hours when present,
-/// otherwise a recommendation (or "over budget") placeholder — or, for a
-/// day with no data at all yet, an empty column whose dashed track you can
-/// click to accept, or drag on to draw a custom span (see `WorkdayBlockView`).
+/// One shift the day is being offered but doesn't have: a dashed outline at
+/// the hours it would occupy, which is also its own click target.
+struct GhostShift: Identifiable {
+    let id: ShiftTemplate.Slot
+    let startHour: Double
+    let endHour: Double
+}
+
+/// A single day's vertical bar: its shifts drawn at their real times, with
+/// a dashed ghost wherever the day could hold another one.
 ///
-/// The workday itself (Work capsule + Break capsule beneath it, sized by
-/// the auto-detected break — the one thing here without a precise time) is
-/// drag-editable the same three ways as a meeting: top edge = start,
-/// bottom edge = end, middle = move. Meetings (real calendar times) are
-/// drawn as separate meeting blocks on top (yellow normally; a lighter
-/// red on fiery days so they stay compatible with the work capsule),
-/// positioned at their actual times, each independently drag-editable —
-/// see `MeetingBlockView`. There's no "focus" segment: it was always a
-/// derived guess (effective hours minus meetings), never a directly known
-/// quantity.
+/// A day holds up to three shifts — morning, afternoon, evening. Clicking a
+/// ghost puts a real shift there; dragging a shift's top edge moves its
+/// start, its bottom edge its end, and its middle the whole thing. Extend
+/// one shift until it reaches the next and the two become one, which is how
+/// a day that turned out to have no lunch in it gets recorded as such.
+/// The gaps between shifts are the breaks, and they're simply absent from
+/// the day's hours rather than subtracted from them afterwards.
+///
+/// Meetings (real calendar times) are drawn as separate blocks on top
+/// (yellow normally; a lighter red on fiery days so they stay compatible
+/// with the shift capsules), each independently drag-editable — see
+/// `MeetingBlockView`. There's no "focus" segment: it was always a derived
+/// guess (effective hours minus meetings), never a directly known quantity.
 struct DayBar: View {
     let span: WorkdaySpan?
-    /// The calendar day this bar represents — needed to construct a
-    /// brand-new span (with real dates, not just hour-of-day) when the
-    /// user draws one on a day with no data yet.
+    /// The calendar day this bar represents — needed to construct real
+    /// times (not just hour-of-day) when the user adds or draws a shift.
     let day: Date
     let chartHeight: CGFloat
     let isWeekend: Bool
@@ -49,19 +57,23 @@ struct DayBar: View {
     let showsWorkdayTrack: Bool
     let showsHoursLabel: Bool
     let recommendedHours: Double?
-    /// The configured workday span (from `WorkPreferences`), used to
-    /// position the dashed "normal workday" track.
-    let workdayStartHour: Double
-    let workdayEndHour: Double
+    /// The configured shift slots (from `WorkPreferences`) the ghosts are
+    /// drawn from.
+    let shiftTemplates: [ShiftTemplate]
     /// Called with a meeting's id and its new (start, end) once a drag
     /// (resize-top, resize-bottom, or move) ends.
     var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
-    /// Called with the day's new (start, end) once a drag on the workday
-    /// itself ends — whether resizing/moving an existing day or drawing a
-    /// brand new one from scratch.
-    var onWorkdayChange: (Date, Date) -> Void = { _, _ in }
+    /// Called with a shift's id and its new (start, end) once a drag on it
+    /// ends.
+    var onShiftChange: (UUID, Date, Date) -> Void = { _, _, _ in }
+    /// Called when a ghost is clicked or a new shift drawn from scratch.
+    var onShiftAdd: (Date, Date) -> Void = { _, _ in }
+    /// Called when a shift is ⌥-clicked.
+    var onShiftRemove: (UUID) -> Void = { _ in }
 
     private var calendar: Calendar { .current }
+
+    private var shifts: [WorkShift] { span?.shifts ?? [] }
 
     private func recommendationLabel(_ recommendedHours: Double) -> String {
         if recommendedHours < 0 {
@@ -70,92 +82,88 @@ struct DayBar: View {
         return "\(Int(recommendedHours.rounded(.up)))h?"
     }
 
-    /// Whether to show the recommendation instead of the normal 9am-5pm
-    /// workday track: only when there's no real data yet for this day.
+    /// Whether to show the recommendation instead of the plain shift
+    /// template: only when there's no real work on this day yet.
     private var showsRecommendation: Bool {
-        recommendedHours != nil && !(span.map { $0.hours > 0 } ?? false)
+        recommendedHours != nil && shifts.isEmpty
     }
 
-    /// The dashed track's start/end hours when this day is empty and a
-    /// track is visible — what a click on that capsule should create.
-    /// Nil when there's already real data, weekends, or no positive
-    /// height to accept (over budget / zero recommendation).
-    private var suggestedTrackHours: (start: Double, end: Double)? {
-        guard !(span.map { $0.hours > 0 } ?? false) else { return nil }
-        guard showsWorkdayTrack && !isWeekend else { return nil }
-        if showsRecommendation, let recommendedHours {
-            guard recommendedHours > 0 else { return nil }
-            let end = (workdayStartHour + recommendedHours)
-                .clamped(to: ChartScale.startHour...ChartScale.endHour)
-            return (workdayStartHour, end)
+    /// The shifts on offer. On an untouched day with a recommendation, the
+    /// ghosts are that recommendation laid into the slots in order — seven
+    /// hours fills the morning and the afternoon and leaves the evening
+    /// alone, and a week that's fallen behind reaches into the evening by
+    /// itself. Otherwise every slot the day hasn't already got a shift in.
+    private var ghosts: [GhostShift] {
+        guard showsWorkdayTrack, !isWeekend else { return [] }
+        guard shifts.count < ShiftPlan.maximumShifts else { return [] }
+
+        if showsRecommendation {
+            guard let recommendedHours, recommendedHours > 0 else { return [] }
+            var remaining = recommendedHours
+            var offered: [GhostShift] = []
+            for template in shiftTemplates {
+                guard remaining > 0.01 else { break }
+                let end = min(template.startHour + remaining, template.endHour)
+                guard end > template.startHour else { continue }
+                offered.append(GhostShift(id: template.slot, startHour: template.startHour, endHour: end))
+                remaining -= end - template.startHour
+            }
+            return offered
         }
-        return (workdayStartHour, workdayEndHour)
+
+        return shiftTemplates.compactMap { template in
+            let taken = shifts.contains { shift in
+                hourOfDay(shift.start) < template.endHour && hourOfDay(shift.end) > template.startHour
+            }
+            guard !taken, template.endHour > template.startHour else { return nil }
+            return GhostShift(id: template.slot, startHour: template.startHour, endHour: template.endHour)
+        }
+    }
+
+    /// Hours since midnight on `day` — negative before it, past 24 after,
+    /// which is what keeps a shift running to midnight comparable with a
+    /// template that ends at 24.
+    private func hourOfDay(_ date: Date) -> Double {
+        date.timeIntervalSince(calendar.startOfDay(for: day)) / 3600.0
     }
 
     var body: some View {
-        let workdayTop = CGFloat(ChartScale.fraction(of: workdayStartHour)) * chartHeight
         let isOverBudget = showsRecommendation && (recommendedHours ?? 0) < 0
-
-        // The workday track normally spans the configured workday, but when
-        // there's no real data yet and a recommendation exists, its height
-        // instead reflects the recommended hours (anchored at the
-        // configured start), so the recommendation and "normal workday"
-        // indicator share one visual element. A negative recommendation
-        // (already over budget) has no positive height to draw.
-        let workdayHeight: CGFloat = {
-            if showsRecommendation, let recommendedHours, recommendedHours > 0 {
-                let recEndHour = (workdayStartHour + recommendedHours).clamped(to: ChartScale.startHour...ChartScale.endHour)
-                return CGFloat(ChartScale.fraction(of: recEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
-            }
-            return CGFloat(ChartScale.fraction(of: workdayEndHour) - ChartScale.fraction(of: workdayStartHour)) * chartHeight
-        }()
+        let labelHour = ghosts.first?.startHour ?? shiftTemplates.first?.startHour ?? ChartScale.startHour
+        let labelTop = CGFloat(ChartScale.fraction(of: labelHour)) * chartHeight
 
         ZStack(alignment: .top) {
             Capsule()
                 .fill(Color.gray.opacity(isWeekend ? 0.05 : 0.1))
                 .frame(width: barWidth, height: chartHeight)
 
-            if showsWorkdayTrack && !isWeekend {
-                let recommendationIsZero = showsRecommendation && (recommendedHours ?? 0) == 0
-
-                if !recommendationIsZero && !isOverBudget {
-                    Capsule()
-                        .fill(Color.gray.opacity(0.18))
-                        .frame(width: barWidth, height: max(workdayHeight, barWidth))
-                        .overlay(
-                            Capsule()
-                                .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
-                                .foregroundColor(.secondary.opacity(0.6))
-                                .frame(width: barWidth, height: max(workdayHeight, barWidth))
-                        )
-                        .offset(y: workdayTop)
-                }
-
-                if showsRecommendation, let recommendedHours, showsHoursLabel {
-                    Text(recommendationLabel(recommendedHours))
-                        .font(.system(size: 9, weight: isOverBudget ? .semibold : .regular))
-                        .foregroundColor(isOverBudget ? .red : .secondary.opacity(0.6))
-                        .fixedSize()
-                        .offset(y: workdayTop - 13)
-                }
+            if showsWorkdayTrack && !isWeekend, showsRecommendation, let recommendedHours, showsHoursLabel {
+                Text(recommendationLabel(recommendedHours))
+                    .font(.system(size: 9, weight: isOverBudget ? .semibold : .regular))
+                    .foregroundColor(isOverBudget ? .red : .secondary.opacity(0.6))
+                    .fixedSize()
+                    .offset(y: labelTop - 13)
             }
 
-            WorkdayBlockView(
-                span: span,
+            ShiftLayerView(
+                shifts: shifts,
+                // Nothing to accept on a day you're already over budget on;
+                // the red "over Xh" above says so instead.
+                ghosts: isOverBudget ? [] : ghosts,
                 day: day,
                 chartHeight: chartHeight,
                 barWidth: barWidth,
                 isWeekend: isWeekend,
-                // Match the dashed track the user sees: recommended hours when
-                // one exists, otherwise the configured workday. A click on that
-                // empty capsule places a real span there (see emptyDayView).
-                suggestedStartHour: suggestedTrackHours?.start,
-                suggestedEndHour: suggestedTrackHours?.end,
-                onChange: onWorkdayChange
+                // Faint once the day has real work on it: still an offer,
+                // but no longer the thing the column is about.
+                ghostsAreSubdued: !shifts.isEmpty,
+                onChange: onShiftChange,
+                onAdd: onShiftAdd,
+                onRemove: onShiftRemove
             )
 
-            // Meetings render even on days with no work capsule yet (future
-            // week days get a 0h span that only holds calendar blocks).
+            // Meetings render even on days with no shifts yet (future week
+            // days get an empty span that only holds calendar blocks).
             if let span, !span.meetings.isEmpty {
                 let (clampStart, clampEnd) = meetingClampBounds(for: span, day: day)
                 let fireIntensity = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
@@ -179,10 +187,11 @@ struct DayBar: View {
         .contentShape(Rectangle())
     }
 
-    /// Drag bounds for meetings: the workday when present, otherwise the
-    /// chart's 6am–midnight window so future-day meetings stay editable.
+    /// Drag bounds for meetings: the day's worked envelope when there is
+    /// one, otherwise the chart's 6am–midnight window so future-day
+    /// meetings stay editable.
     private func meetingClampBounds(for span: WorkdaySpan, day: Date) -> (Date, Date) {
-        if span.hours > 0 {
+        if !span.shifts.isEmpty {
             return (span.start, span.end)
         }
         let startOfDay = calendar.startOfDay(for: day)
@@ -328,22 +337,24 @@ private struct MeetingBlockView: View {
 }
 
 /// Heat for a "fiery" day — shades of red once you're over the balanced
-/// 8h line (or working a weekend). 0 = calm gray; 1 = full red.
+/// line (or working a weekend). 0 = calm gray; 1 = full red.
 ///
 /// Not private: the chart's per-day hours label is coloured by the same
-/// rule as the capsule it describes, so the two agree about which days
+/// rule as the capsules it describes, so the two agree about which days
 /// count as fiery.
 enum DayFire {
-    static let balancedHours = 8
+    /// Seven, not eight: a standard day is 9–12 and 1–5, and the hour
+    /// between them is no longer counted as worked.
+    static let balancedHours = 7
 
-    /// 0 under the line; ramps 9→0.25 … 12+→1. Any weekend work is full fire.
+    /// 0 under the line; ramps 8→0.25 … 11+→1. Any weekend work is full fire.
     static func intensity(hours: Int, isWeekend: Bool) -> Double {
         if isWeekend, hours > 0 { return 1 }
         guard hours > balancedHours else { return 0 }
         return min(Double(hours - balancedHours) / 4.0, 1.0)
     }
 
-    /// Work capsule: gray at 0, soft orange-red → deep red as intensity climbs.
+    /// Shift capsule: gray at 0, soft orange-red → deep red as intensity climbs.
     static func workColor(intensity: Double) -> Color {
         guard intensity > 0 else { return .gray }
         let green = 0.42 - intensity * 0.32
@@ -351,14 +362,8 @@ enum DayFire {
         return Color(red: 0.90, green: green, blue: blue)
     }
 
-    /// Break capsule: a lighter shade of the same fire.
-    static func breakColor(intensity: Double) -> Color {
-        guard intensity > 0 else { return Color.gray.opacity(0.35) }
-        return workColor(intensity: intensity).opacity(0.40)
-    }
-
     /// Meeting overlay: yellow on calm days; a brighter coral-red on fiery
-    /// days so blocks stay distinct from the work capsule without clashing.
+    /// days so blocks stay distinct from the shifts without clashing.
     static func meetingColor(intensity: Double) -> Color {
         guard intensity > 0 else { return .yellow }
         let green = 0.52 - intensity * 0.22
@@ -367,114 +372,111 @@ enum DayFire {
     }
 }
 
-/// The workday itself: Work + Break capsules for a day that already has
-/// data, drag-editable the same three ways as a meeting block (top edge =
-/// start, bottom edge = end, middle = move); or, for a day with no data at
-/// all yet, click the dashed track to accept those hours, or click-and-drag
-/// anywhere in the column to draw a brand-new span from scratch — like
-/// dragging out a new event in a calendar day view (order-independent:
-/// drag up or down, whichever end you started from).
-private struct WorkdayBlockView: View {
-    let span: WorkdaySpan?
+/// The day's shifts and the ghosts of the ones it hasn't got, with one
+/// gesture over the whole column deciding between them.
+///
+/// That gesture deliberately lives on a stationary container rather than on
+/// the capsules: a `DragGesture` measures translation inside its own view,
+/// and a capsule moves as a *result* of the drag, so attaching it there
+/// measured each frame's movement from an origin that had just shifted —
+/// the capsule lagged, then caught up, and tracked the pointer unevenly.
+/// Nothing in the container moves while you drag, so the numbers stay
+/// honest. It's also the only way ghosts, shifts and bare column can share
+/// one press without competing recognizers deciding between them.
+private struct ShiftLayerView: View {
+    let shifts: [WorkShift]
+    let ghosts: [GhostShift]
     let day: Date
     let chartHeight: CGFloat
     let barWidth: CGFloat
     let isWeekend: Bool
-    /// Hours matching the visible dashed track; a tap inside that region
-    /// creates a span at these times instead of requiring a draw-drag.
-    let suggestedStartHour: Double?
-    let suggestedEndHour: Double?
-    let onChange: (Date, Date) -> Void
+    let ghostsAreSubdued: Bool
+    let onChange: (UUID, Date, Date) -> Void
+    let onAdd: (Date, Date) -> Void
+    let onRemove: (UUID) -> Void
 
     private enum DragMode {
         case moveWhole, resizeTop, resizeBottom
     }
 
-    @State private var dragMode: DragMode?
-    @State private var dragPointsDelta: CGFloat = 0
+    /// What a press landed on, decided once at the start of a gesture and
+    /// held for its duration — otherwise a drag would keep re-deciding as
+    /// the pointer passed over things.
+    private enum Grab: Equatable {
+        case shift(UUID, DragMode)
+        case ghost(Int)
+        case column
+    }
 
+    @State private var grab: Grab?
+    @State private var dragPointsDelta: CGFloat = 0
     @State private var drawStartY: CGFloat?
     @State private var drawCurrentY: CGFloat?
 
-    /// Grab zones at each end of the capsule. Proportional so a short day
-    /// stays resizable — a fixed 8pt handle vanished entirely on bars under
-    /// ~80 minutes, leaving them movable but not adjustable — and bounded so
-    /// a long one still has a middle to grab.
+    /// Grab zones at each end of a capsule. Proportional so a short shift
+    /// stays resizable — a fixed 8pt handle vanished entirely on blocks
+    /// under ~80 minutes, leaving them movable but not adjustable — and
+    /// bounded so a long one still has a middle to grab.
     private static let minHandleHeight: CGFloat = 6
     private static let maxHandleHeight: CGFloat = 14
-    /// How far outside the capsule still counts as grabbing it. Generous
-    /// vertically because there's nothing above or below to compete with —
-    /// and because a press a couple of points past the end of a pill is
-    /// plainly aimed at that pill.
+    /// How far outside a capsule still counts as grabbing it. Applied only
+    /// after every exact hit has been ruled out, so two shifts a few points
+    /// apart don't have their padded zones decide between them.
     private static let grabPadding: CGFloat = 8
-    /// A drag can't shrink a day below this.
+    /// A drag can't shrink a shift below this.
     private static let minimumDuration: TimeInterval = 15 * 60
-    /// Below this a press is a click, not a drag, and changes nothing.
-    private static let dragSlop: CGFloat = 2
-    /// Movement below this (in points) counts as a click, not a draw.
+    /// Below this a press is a click, not a drag: it changes nothing on a
+    /// shift, and accepts the outline it landed on.
     private static let tapSlop: CGFloat = 4
     private static let drawColor = Color.gray.opacity(0.5)
+    /// However short a shift is, this much of it is drawn — a quarter hour
+    /// is under 3pt on an eighteen-hour scale, which is nothing to aim at.
+    private var minimumCapsuleHeight: CGFloat { barWidth / 2 }
 
     private var secondsPerPoint: Double {
         ChartScale.secondsPerPoint(chartHeight: chartHeight)
     }
 
+    // MARK: - Drawing
+
     var body: some View {
-        if let span, span.hours > 0 {
-            existingSpanView(span: span)
-        } else {
-            emptyDayView()
-        }
-    }
-
-    // MARK: - Existing span: three-way edit
-
-    /// The capsule, plus one gesture covering the whole column.
-    ///
-    /// The gesture deliberately lives on this stationary container rather
-    /// than on the capsule: a `DragGesture` measures translation inside its
-    /// own view, and the capsule moves as a *result* of the drag, so
-    /// attaching it there measured each frame's movement from an origin
-    /// that had just shifted — the capsule lagged, then caught up, and
-    /// tracked the pointer unevenly. Nothing here moves while you drag, so
-    /// the numbers stay honest.
-    @ViewBuilder
-    private func existingSpanView(span: WorkdaySpan) -> some View {
-        let (liveStart, liveEnd) = previewTimes(span: span)
-
-        let topOffset = CGFloat(ChartScale.fraction(of: liveStart)) * chartHeight
-        let bottomOffset = CGFloat(ChartScale.fraction(of: liveEnd)) * chartHeight
-        let barHeight = max(bottomOffset - topOffset, 0)
-
-        // Break height comes from the live duration, not the saved one:
-        // sized from the stored total, the split slid around inside the
-        // capsule as the capsule itself was resized.
-        let liveHours = liveEnd.timeIntervalSince(liveStart) / 3600
-        let breakHours = Double(span.breakMinutesUsed) / 60
-        let workedFraction = liveHours > 0 ? CGFloat(max(liveHours - breakHours, 0) / liveHours) : 0
-        let workedHeight = barHeight * workedFraction
-        let breakHeight = max(barHeight - workedHeight, 0)
-
-        // Heat from the live hours too, for the same reason: taken from the
-        // saved value, the capsule stayed calm all the way through a drag
-        // over the 8h line and only turned red once you let go.
-        let liveWorkedHours = Int(max(liveHours - breakHours, 0).rounded(.up))
-        let fire = DayFire.intensity(hours: liveWorkedHours, isWeekend: isWeekend)
+        // Heat from what the drag is doing rather than from what's saved:
+        // taken from the stored value, a day dragged over the balanced line
+        // stayed calm all the way through and only turned red on release.
+        let live = liveShifts
+        let liveHours = live.reduce(0.0) { $0 + $1.hours }
+        let fire = DayFire.intensity(hours: Int(liveHours.rounded(.up)), isWeekend: isWeekend)
         let workColor = DayFire.workColor(intensity: fire)
-        let breakColor = DayFire.breakColor(intensity: fire)
 
         ZStack(alignment: .top) {
-            if workedHeight > 0 {
+            ForEach(ghosts) { ghost in
+                let (top, bottom) = ghostBounds(ghost)
+                let height = max(bottom - top, minimumCapsuleHeight)
+                Capsule()
+                    .fill(Color.gray.opacity(ghostsAreSubdued ? 0.08 : 0.18))
+                    .overlay(
+                        Capsule()
+                            .stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                            .foregroundColor(.secondary.opacity(ghostsAreSubdued ? 0.3 : 0.6))
+                    )
+                    .frame(width: barWidth, height: height)
+                    .offset(y: top)
+            }
+
+            ForEach(live) { shift in
+                let (top, bottom) = shiftBounds(shift)
                 Capsule()
                     .fill(workColor)
-                    .frame(width: barWidth, height: max(workedHeight, barWidth / 2))
-                    .offset(y: topOffset)
+                    .frame(width: barWidth, height: max(bottom - top, minimumCapsuleHeight))
+                    .offset(y: top)
             }
-            if breakHeight > 0 {
+
+            if let startY = drawStartY, let currentY = drawCurrentY {
+                let top = min(startY, currentY)
                 Capsule()
-                    .fill(breakColor)
-                    .frame(width: barWidth, height: max(breakHeight, barWidth / 2))
-                    .offset(y: topOffset + workedHeight)
+                    .fill(Self.drawColor)
+                    .frame(width: barWidth, height: max(abs(currentY - startY), minimumCapsuleHeight))
+                    .offset(y: top)
             }
         }
         // Fills the width `DayBar` gives it rather than claiming a fixed
@@ -487,33 +489,17 @@ private struct WorkdayBlockView: View {
         #if os(macOS)
         .background(WindowDragBlocker())
         #endif
-        .gesture(
-            DragGesture(minimumDistance: Self.dragSlop)
-                .onChanged { value in
-                    if dragMode == nil {
-                        dragMode = mode(forStartY: value.startLocation.y, span: span)
-                    }
-                    guard dragMode != nil else { return }
-                    dragPointsDelta = value.translation.height
-                }
-                .onEnded { value in
-                    defer {
-                        dragMode = nil
-                        dragPointsDelta = 0
-                    }
-                    guard let mode = dragMode else { return }
-                    let (start, end) = times(span: span, mode: mode, deltaPoints: value.translation.height)
-                    onChange(start, end)
-                }
-        )
+        .gesture(dragGesture)
+        .help(helpText)
         #if os(macOS)
         .onContinuousHover { phase in
             switch phase {
             case .active(let point):
-                switch mode(forStartY: point.y, span: span) {
-                case .resizeTop, .resizeBottom: NSCursor.resizeUpDown.set()
-                case .moveWhole: NSCursor.openHand.set()
-                case nil: NSCursor.arrow.set()
+                switch resolve(at: point.y) {
+                case .shift(_, .resizeTop), .shift(_, .resizeBottom): NSCursor.resizeUpDown.set()
+                case .shift(_, .moveWhole): NSCursor.openHand.set()
+                case .ghost: NSCursor.pointingHand.set()
+                case .column: NSCursor.crosshair.set()
                 }
             case .ended:
                 NSCursor.arrow.set()
@@ -522,31 +508,149 @@ private struct WorkdayBlockView: View {
         #endif
     }
 
-    /// Which part of the capsule a press at `y` has hold of, or nil for a
-    /// press that missed it.
-    private func mode(forStartY y: CGFloat, span: WorkdaySpan) -> DragMode? {
-        let top = CGFloat(ChartScale.fraction(of: span.start)) * chartHeight
-        // The drawn capsule keeps a minimum height however short the day is,
-        // so a quarter-hour is visibly ~18pt of pill sitting below where its
-        // end time falls. Hit-testing against the end time would call the
-        // lower half of that pill a miss — exactly the short days that are
-        // hardest to grab in the first place.
-        let height = max(CGFloat(ChartScale.fraction(of: span.end)) * chartHeight - top, barWidth)
-        let bottom = top + height
-        let handle = min(Self.maxHandleHeight, max(Self.minHandleHeight, height / 3))
+    private var helpText: String {
+        if shifts.isEmpty {
+            return ghosts.isEmpty
+                ? "Drag to record a shift"
+                : "Click an outline to add that shift, or drag to draw one"
+        }
+        return "Drag a shift's edge to extend it — reach the next one and they merge. ⌥-click a shift to remove it."
+    }
 
-        guard y >= top - Self.grabPadding, y <= bottom + Self.grabPadding else { return nil }
+    /// The shifts as they should look right now: saved, except for the one
+    /// being dragged, which shows where it would land.
+    private var liveShifts: [WorkShift] {
+        guard case let .shift(id, mode)? = grab, dragPointsDelta != 0 else { return shifts }
+        return shifts.map { shift in
+            guard shift.id == id else { return shift }
+            let (start, end) = times(shift: shift, mode: mode, deltaPoints: dragPointsDelta)
+            return WorkShift(id: shift.id, start: start, end: end)
+        }
+    }
+
+    private func shiftBounds(_ shift: WorkShift) -> (top: CGFloat, bottom: CGFloat) {
+        let top = CGFloat(ChartScale.fraction(of: shift.start)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: shift.end)) * chartHeight
+        return (top, max(bottom, top + minimumCapsuleHeight))
+    }
+
+    private func ghostBounds(_ ghost: GhostShift) -> (top: CGFloat, bottom: CGFloat) {
+        let top = CGFloat(ChartScale.fraction(of: ghost.startHour)) * chartHeight
+        let bottom = CGFloat(ChartScale.fraction(of: ghost.endHour)) * chartHeight
+        return (top, max(bottom, top + minimumCapsuleHeight))
+    }
+
+    // MARK: - The one gesture
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let target = grab ?? resolve(at: value.startLocation.y)
+                if grab == nil { grab = target }
+
+                switch target {
+                case .shift:
+                    dragPointsDelta = value.translation.height
+                case .ghost, .column:
+                    // A click on an outline is an acceptance, not a draw, so
+                    // it gets no preview until it's clearly become a drag.
+                    guard abs(value.translation.height) >= Self.tapSlop else { return }
+                    if drawStartY == nil { drawStartY = value.startLocation.y }
+                    drawCurrentY = value.location.y
+                }
+            }
+            .onEnded { value in
+                let target = grab ?? resolve(at: value.startLocation.y)
+                defer {
+                    grab = nil
+                    dragPointsDelta = 0
+                    drawStartY = nil
+                    drawCurrentY = nil
+                }
+
+                let isTap = abs(value.translation.height) < Self.tapSlop
+
+                switch target {
+                case let .shift(id, mode):
+                    guard let shift = shifts.first(where: { $0.id == id }) else { return }
+                    if isTap {
+                        // Removing is deliberate: a plain click on a shift
+                        // does nothing, so the block can be aimed at and
+                        // missed without a day's work disappearing.
+                        if isOptionHeld { onRemove(id) }
+                        return
+                    }
+                    let (start, end) = times(shift: shift, mode: mode, deltaPoints: value.translation.height)
+                    onChange(id, start, end)
+
+                case let .ghost(index):
+                    if isTap {
+                        guard index < ghosts.count else { return }
+                        let ghost = ghosts[index]
+                        let start = snap(date(atHour: ghost.startHour))
+                        let end = snap(date(atHour: ghost.endHour))
+                        if start < end { onAdd(start, end) }
+                        return
+                    }
+                    draw(from: value)
+
+                case .column:
+                    guard !isTap else { return }
+                    draw(from: value)
+                }
+            }
+    }
+
+    /// A drag across bare column, or off an outline: a brand-new shift
+    /// between the two ends of the gesture, whichever way round they came.
+    private func draw(from value: DragGesture.Value) {
+        let startY = drawStartY ?? value.startLocation.y
+        let endY = value.location.y
+        let start = snap(date(atY: min(startY, endY)))
+        let end = snap(date(atY: max(startY, endY)))
+        if start < end { onAdd(start, end) }
+    }
+
+    private var isOptionHeld: Bool {
+        #if os(macOS)
+        return NSEvent.modifierFlags.contains(.option)
+        #else
+        return false
+        #endif
+    }
+
+    /// What a press at `y` has hold of. Shifts win over ghosts, and an
+    /// exact hit on either wins over a padded one.
+    private func resolve(at y: CGFloat) -> Grab {
+        for shift in shifts {
+            let (top, bottom) = shiftBounds(shift)
+            if y >= top, y <= bottom {
+                return .shift(shift.id, mode(y: y, top: top, bottom: bottom))
+            }
+        }
+        for shift in shifts {
+            let (top, bottom) = shiftBounds(shift)
+            if y >= top - Self.grabPadding, y <= bottom + Self.grabPadding {
+                return .shift(shift.id, mode(y: y, top: top, bottom: bottom))
+            }
+        }
+        for (index, ghost) in ghosts.enumerated() {
+            let (top, bottom) = ghostBounds(ghost)
+            if y >= top, y <= bottom { return .ghost(index) }
+        }
+        return .column
+    }
+
+    /// Which part of a capsule a press at `y` has hold of.
+    private func mode(y: CGFloat, top: CGFloat, bottom: CGFloat) -> DragMode {
+        let height = bottom - top
+        let handle = min(Self.maxHandleHeight, max(Self.minHandleHeight, height / 3))
         if y <= top + handle { return .resizeTop }
         if y >= bottom - handle { return .resizeBottom }
         return .moveWhole
     }
 
-    /// What the capsule currently shows: the saved times, or the result of
-    /// the drag in progress.
-    private func previewTimes(span: WorkdaySpan) -> (Date, Date) {
-        guard let dragMode else { return (span.start, span.end) }
-        return times(span: span, mode: dragMode, deltaPoints: dragPointsDelta)
-    }
+    // MARK: - Drag arithmetic
 
     /// The one place a drag turns into times — used for both the live
     /// capsule and the value saved on release, so what you let go of is
@@ -557,22 +661,26 @@ private struct WorkdayBlockView: View {
     /// Rounding is applied to what the drag actually moves, and nothing
     /// else. Resizing snaps the edge you have hold of and leaves the far
     /// one exactly as it was; moving snaps the start and carries the
-    /// original duration with it, so both ends shift together and the day
+    /// original duration with it, so both ends shift together and the shift
     /// keeps its length.
     ///
     /// What that avoids is rounding a time nobody touched: these come from
     /// real wake and sleep events, and turning a measured 9:07 start into
     /// 9:05 because someone adjusted the evening would quietly falsify the
-    /// record. A day left with one rounded end and one measured one is the
+    /// record. A shift left with one rounded end and one measured one is the
     /// honest result of having rounded one end.
-    private func times(span: WorkdaySpan, mode: DragMode, deltaPoints: CGFloat) -> (Date, Date) {
+    ///
+    /// Overlapping a neighbour isn't prevented here: running one shift into
+    /// the next is how you say they were really one, and the merge happens
+    /// where the day is written (`ShiftPlan.normalize`).
+    private func times(shift: WorkShift, mode: DragMode, deltaPoints: CGFloat) -> (Date, Date) {
         let delta = Double(deltaPoints) * secondsPerPoint
-        var start = span.start
-        var end = span.end
+        var start = shift.start
+        var end = shift.end
         switch mode {
         case .moveWhole:
             start = snap(start.addingTimeInterval(delta))
-            end = start.addingTimeInterval(span.end.timeIntervalSince(span.start))
+            end = start.addingTimeInterval(shift.end.timeIntervalSince(shift.start))
         case .resizeTop:
             start = snap(start.addingTimeInterval(delta))
         case .resizeBottom:
@@ -585,19 +693,19 @@ private struct WorkdayBlockView: View {
         let bounds = chartBounds()
         switch mode {
         case .moveWhole:
-            let duration = span.end.timeIntervalSince(span.start)
+            let duration = shift.end.timeIntervalSince(shift.start)
             let earliest = bounds.lowerBound
             let latest = bounds.upperBound.addingTimeInterval(-duration)
-            // A day longer than the drawn scale has nowhere inside it to sit.
-            // Shrinking it to fit would throw away hours nobody asked to
-            // lose, and sliding it anyway pushed its end past midnight, so
-            // moving one simply doesn't apply — resize it first.
-            guard latest >= earliest else { return (span.start, span.end) }
+            // A shift longer than the drawn scale has nowhere inside it to
+            // sit. Shrinking it to fit would throw away hours nobody asked
+            // to lose, and sliding it anyway pushed its end past midnight,
+            // so moving one simply doesn't apply — resize it first.
+            guard latest >= earliest else { return (shift.start, shift.end) }
             let clamped = min(max(start, earliest), latest)
             return (clamped, clamped.addingTimeInterval(duration))
         case .resizeTop:
             // The far end is clamped too, not just the one being dragged:
-            // `WorkdayCalculator` can produce a span that starts before 6am,
+            // `WorkdayCalculator` can produce a shift that starts before 6am,
             // and resizing the other end would otherwise write that
             // undrawable time straight back out again.
             let fixedEnd = clamp(end, to: bounds)
@@ -607,7 +715,7 @@ private struct WorkdayBlockView: View {
             }
             guard newStart >= bounds.lowerBound else {
                 // Only reachable when the end is itself within a quarter hour
-                // of the scale's start. The day has to be somewhere, so it
+                // of the scale's start. The shift has to be somewhere, so it
                 // takes the minimum from there rather than escaping upwards.
                 return (bounds.lowerBound, bounds.lowerBound.addingTimeInterval(Self.minimumDuration))
             }
@@ -630,8 +738,8 @@ private struct WorkdayBlockView: View {
     }
 
     /// The window the chart can actually draw, as real times on this day.
-    /// Outside it the capsule would stop moving while the pointer kept
-    /// going, which read as the drag sticking.
+    /// Outside it a capsule would stop moving while the pointer kept going,
+    /// which read as the drag sticking.
     private func chartBounds() -> ClosedRange<Date> {
         // Built by calendar arithmetic rather than by adding seconds to
         // midnight: on the day the clocks go forward, midnight plus six
@@ -645,109 +753,30 @@ private struct WorkdayBlockView: View {
         return first...max(last, first)
     }
 
-    // MARK: - Empty day: accept suggestion or draw a new one
-
-    /// Y-range of the dashed track inside this column, if one is suggested.
-    private var suggestedTrackYRange: ClosedRange<CGFloat>? {
-        guard let startHour = suggestedStartHour, let endHour = suggestedEndHour,
-              endHour > startHour else { return nil }
-        let top = CGFloat(ChartScale.fraction(of: startHour)) * chartHeight
-        let bottom = CGFloat(ChartScale.fraction(of: endHour)) * chartHeight
-        return top...max(bottom, top + barWidth)
-    }
-
-    @ViewBuilder
-    private func emptyDayView() -> some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: barWidth + 20, height: chartHeight)
-            .contentShape(Rectangle())
-            #if os(macOS)
-            .background(WindowDragBlocker())
-            #endif
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        // Don't show a draw preview for a plain click on the
-                        // suggested track — that resolves to "accept" on end.
-                        if abs(value.translation.height) < Self.tapSlop,
-                           let range = suggestedTrackYRange,
-                           range.contains(value.startLocation.y) {
-                            return
-                        }
-                        if drawStartY == nil { drawStartY = value.startLocation.y }
-                        drawCurrentY = value.location.y
-                    }
-                    .onEnded { value in
-                        defer {
-                            drawStartY = nil
-                            drawCurrentY = nil
-                        }
-
-                        let isTap = abs(value.translation.height) < Self.tapSlop
-
-                        // Click on the empty dotted capsule → place a real
-                        // span at those suggested hours.
-                        if isTap,
-                           let startHour = suggestedStartHour,
-                           let endHour = suggestedEndHour,
-                           let range = suggestedTrackYRange,
-                           range.contains(value.startLocation.y) {
-                            let a = snap(date(atHour: startHour))
-                            let b = snap(date(atHour: endHour))
-                            if a < b { onChange(a, b) }
-                            return
-                        }
-
-                        // A plain click elsewhere does nothing; only a real
-                        // drag draws a custom span.
-                        guard !isTap else { return }
-                        guard let startY = drawStartY ?? Optional(value.startLocation.y) else { return }
-                        let endY = value.location.y
-                        let a = date(atY: min(startY, endY))
-                        let b = date(atY: max(startY, endY))
-
-                        let snappedA = snap(a)
-                        let snappedB = snap(b)
-                        if snappedA < snappedB {
-                            onChange(snappedA, snappedB)
-                        }
-                    }
-            )
-            #if os(macOS)
-            .onHover { hovering in
-                if hovering { NSCursor.crosshair.push() } else { NSCursor.pop() }
-            }
-            #endif
-            .overlay(
-                Group {
-                    if let startY = drawStartY, let currentY = drawCurrentY {
-                        let top = min(startY, currentY)
-                        let height = max(abs(currentY - startY), barWidth / 2)
-                        Capsule()
-                            .fill(Self.drawColor)
-                            .frame(width: barWidth, height: height)
-                            .offset(y: top)
-                            .allowsHitTesting(false)
-                    }
-                }
-            )
-    }
-
     /// Converts a raw Y position within `chartHeight` into a real `Date` on
     /// `day`, via `ChartScale`'s inverse mapping.
     private func date(atY y: CGFloat) -> Date {
         date(atHour: ChartScale.hour(atFraction: chartHeight > 0 ? Double(y / chartHeight) : 0))
     }
 
+    /// Wall-clock, like `ChartScale.fraction(of:)` that it inverts — set as
+    /// an hour component rather than added as an interval, so a shift drawn
+    /// at 9am on the day the clocks go forward is at 9am and not 10.
     private func date(atHour hour: Double) -> Date {
-        let hourInt = Int(hour)
-        let minuteInt = Int((hour - Double(hourInt)) * 60)
-        return Calendar.current.date(bySettingHour: hourInt, minute: minuteInt, second: 0, of: day) ?? day
+        let calendar = Calendar.current
+        let midnight = calendar.startOfDay(for: day)
+        // 24 is no hour of this day; it's the start of the next one, which
+        // `bySettingHour:` can't express.
+        guard hour < 24 else {
+            return calendar.date(byAdding: .day, value: 1, to: midnight) ?? midnight
+        }
+        let hourPart = Int(hour)
+        let minutePart = Int(((hour - Double(hourPart)) * 60).rounded())
+        return calendar.date(bySettingHour: hourPart, minute: minutePart, second: 0, of: midnight) ?? midnight
     }
 
     /// Rounds to the nearest 15 minutes — coarser than a meeting's 5, since
-    /// this is setting the whole workday.
+    /// this is setting a whole shift.
     private func snap(_ date: Date) -> Date {
         let interval: TimeInterval = 15 * 60
         let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval

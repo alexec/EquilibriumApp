@@ -15,10 +15,9 @@ struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
-    /// The configured workday span (from `WorkPreferences`), passed through
-    /// to each day's `DayBar` for its "normal workday" track.
-    let workdayStartHour: Double
-    let workdayEndHour: Double
+    /// The configured shift slots (from `WorkPreferences`), passed through
+    /// to each day's `DayBar` for the ghost outlines it offers.
+    let shiftTemplates: [ShiftTemplate]
     /// The configured weekly target (from `WorkPreferences`), used only for
     /// the fallback week-header sentence's target comparison basis.
     let weeklyTargetHours: Double
@@ -40,7 +39,9 @@ struct DailyBarChartView: View {
     let selection: DayEditorSelection
     let onSelectDay: (Date, DailyPromptKind) -> Void
     let onMeetingChange: (Date, UUID, Date, Date) -> Void
-    let onWorkdayChange: (Date, Date, Date) -> Void
+    let onShiftChange: (Date, UUID, Date, Date) -> Void
+    let onShiftAdd: (Date, Date, Date) -> Void
+    let onShiftRemove: (Date, UUID) -> Void
     let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
@@ -274,7 +275,7 @@ struct DailyBarChartView: View {
     /// keeps a common baseline across the week.
     private func columnTotal(day: Date, span: WorkdaySpan?) -> some View {
         Group {
-            if let hours = span?.roundedUpHours, (span?.hours ?? 0) > 0 {
+            if let hours = span?.roundedUpHours, !(span?.shifts.isEmpty ?? true) {
                 Text("\(hours)h")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(DayFire.intensity(hours: hours, isWeekend: isWeekend(day)) > 0 ? .red : .secondary)
@@ -384,13 +385,18 @@ struct DailyBarChartView: View {
                 showsWorkdayTrack: true,
                 showsHoursLabel: true,
                 recommendedHours: recommendedHours(day),
-                workdayStartHour: workdayStartHour,
-                workdayEndHour: workdayEndHour,
+                shiftTemplates: shiftTemplates,
                 onMeetingChange: { meetingID, newStart, newEnd in
                     onMeetingChange(day, meetingID, newStart, newEnd)
                 },
-                onWorkdayChange: { newStart, newEnd in
-                    onWorkdayChange(day, newStart, newEnd)
+                onShiftChange: { shiftID, newStart, newEnd in
+                    onShiftChange(day, shiftID, newStart, newEnd)
+                },
+                onShiftAdd: { newStart, newEnd in
+                    onShiftAdd(day, newStart, newEnd)
+                },
+                onShiftRemove: { shiftID in
+                    onShiftRemove(day, shiftID)
                 }
             )
 
@@ -410,7 +416,7 @@ struct DailyBarChartView: View {
                     }
                     .help("Reset meetings to calendar data")
                 }
-                if (span?.hours ?? 0) > 0 {
+                if !(span?.shifts.isEmpty ?? true) {
                     Button {
                         onDelete(day)
                     } label: {

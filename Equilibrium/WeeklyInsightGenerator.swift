@@ -41,7 +41,7 @@ enum WeeklyInsightGenerator {
         /// averages over days with calendar data; nil when no day in the
         /// week has any. Returns nil when no day has any data at all.
         static func compute(from spans: [WorkdaySpan?], weeklyTargetHours: Double) -> WeekHeaderStats? {
-            let daysWithData = spans.compactMap { $0 }.filter { $0.hours > 0 }
+            let daysWithData = spans.compactMap { $0 }.filter { !$0.shifts.isEmpty }
             guard !daysWithData.isEmpty else { return nil }
 
             let workAvg = daysWithData.reduce(0.0) { $0 + $1.effectiveHours } / Double(daysWithData.count)
@@ -62,7 +62,7 @@ enum WeeklyInsightGenerator {
         /// How far the average weekday sat from target, already worked out
         /// and worded, so the model never has to subtract anything: asked to
         /// do the arithmetic itself it has said "3 hours over" about a week
-        /// averaging 4h against an 8h target. It phrases the sentence; the
+        /// averaging 4h against a 7h target. It phrases the sentence; the
         /// comparison at the heart of it is decided here.
         var targetComparison: String {
             let difference = workAvgHours - targetHoursPerDay

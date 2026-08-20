@@ -89,8 +89,7 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
-                workdayStartHour: viewModel.preferences.workdayStartHour,
-                workdayEndHour: viewModel.preferences.workdayEndHour,
+                shiftTemplates: viewModel.preferences.shifts,
                 weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },
                 weekLabel: viewModel.weekLabel(for: days),
@@ -108,8 +107,14 @@ struct ContentView: View {
                 onMeetingChange: { day, meetingID, newStart, newEnd in
                     viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
                 },
-                onWorkdayChange: { day, newStart, newEnd in
-                    viewModel.updateWorkday(for: day, newStart: newStart, newEnd: newEnd)
+                onShiftChange: { day, shiftID, newStart, newEnd in
+                    viewModel.updateShift(for: day, shiftID: shiftID, start: newStart, end: newEnd)
+                },
+                onShiftAdd: { day, newStart, newEnd in
+                    viewModel.addShift(for: day, start: newStart, end: newEnd)
+                },
+                onShiftRemove: { day, shiftID in
+                    viewModel.removeShift(for: day, shiftID: shiftID)
                 },
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
