@@ -115,6 +115,9 @@ struct ContentView: View {
                 onShiftRemove: { day, shiftID in
                     viewModel.removeShift(for: day, shiftID: shiftID)
                 },
+                onMeetingRemove: { day, meetingID in
+                    viewModel.removeMeeting(for: day, meetingID: meetingID)
+                },
                 onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )

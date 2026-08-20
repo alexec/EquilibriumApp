@@ -42,6 +42,7 @@ struct DailyBarChartView: View {
     let onShiftChange: (Date, UUID, Date, Date) -> Void
     let onShiftAdd: (Date, Date, Date) -> Void
     let onShiftRemove: (Date, UUID) -> Void
+    let onMeetingRemove: (Date, UUID) -> Void
     let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
@@ -367,7 +368,11 @@ struct DailyBarChartView: View {
                 },
                 onShiftRemove: { shiftID in
                     onShiftRemove(day, shiftID)
-                }
+                },
+                onMeetingRemove: { meetingID in
+                    onMeetingRemove(day, meetingID)
+                },
+                onDeleteDay: { onDelete(day) }
             )
 
             columnTotal(day: day, span: span)

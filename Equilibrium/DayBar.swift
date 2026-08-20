@@ -72,8 +72,13 @@ struct DayBar: View {
     var onShiftChange: (UUID, Date, Date) -> Void = { _, _, _ in }
     /// Called when a ghost is clicked or a new shift drawn from scratch.
     var onShiftAdd: (Date, Date) -> Void = { _, _ in }
-    /// Called when a shift is ⌥-clicked.
+    /// Called when a shift is ⌥-clicked, or deleted from its menu.
     var onShiftRemove: (UUID) -> Void = { _ in }
+    /// Called when a meeting is deleted from its menu.
+    var onMeetingRemove: (UUID) -> Void = { _ in }
+    /// Called when the whole day's hours are deleted from a menu — the same
+    /// thing the hover trash under the column does.
+    var onDeleteDay: () -> Void = {}
 
     private var calendar: Calendar { .current }
 
@@ -160,7 +165,8 @@ struct DayBar: View {
                 onSelect: onSelect,
                 onChange: onShiftChange,
                 onAdd: onShiftAdd,
-                onRemove: onShiftRemove
+                onRemove: onShiftRemove,
+                onDeleteDay: onDeleteDay
             )
 
             // Meetings render even on days with no shifts yet (future week
@@ -178,6 +184,7 @@ struct DayBar: View {
                         dayEnd: clampEnd,
                         color: DayFire.meetingColor(intensity: fireIntensity),
                         onSelect: onSelect,
+                        onRemove: { onMeetingRemove(meeting.id) },
                         onChange: { newStart, newEnd in
                             onMeetingChange(meeting.id, newStart, newEnd)
                         }
@@ -223,6 +230,7 @@ private struct MeetingBlockView: View {
     let dayEnd: Date
     let color: Color
     let onSelect: () -> Void
+    let onRemove: () -> Void
     let onChange: (Date, Date) -> Void
 
     private enum DragMode {
@@ -298,6 +306,13 @@ private struct MeetingBlockView: View {
             }
         }
         .frame(width: barWidth, height: height, alignment: .top)
+        // On the block rather than on the bar underneath it: a meeting is
+        // drawn on top, so a right-click that lands on one is unambiguously
+        // about that meeting, and the shift layer's own menu never has to
+        // know meetings exist.
+        .contextMenu {
+            Button("Delete Meeting", role: .destructive) { onRemove() }
+        }
         .offset(y: topOffset)
     }
 
@@ -480,6 +495,7 @@ private struct ShiftLayerView: View {
     let onChange: (UUID, Date, Date) -> Void
     let onAdd: (Date, Date) -> Void
     let onRemove: (UUID) -> Void
+    let onDeleteDay: () -> Void
 
     private enum DragMode {
         case moveWhole, resizeTop, resizeBottom
@@ -566,6 +582,20 @@ private struct ShiftLayerView: View {
                             color: DayFire.workLabelColor(intensity: fire)
                         )
                     )
+                    // On the capsule, closing over its own id. Hung on the
+                    // container instead — asking hover which block the
+                    // pointer was over — it deleted the wrong shift: the
+                    // menu's contents are built when the view updates, not
+                    // when the menu opens, so they can carry a target from
+                    // an earlier position. A menu that deletes something
+                    // other than what was right-clicked is the one failure
+                    // this feature can't have, and binding each menu to the
+                    // block it's drawn on rules it out by construction.
+                    .contextMenu {
+                        Button("Delete Shift", role: .destructive) { onRemove(shift.id) }
+                        Divider()
+                        dayMenuItems
+                    }
                     .offset(y: top)
             }
 
@@ -600,6 +630,7 @@ private struct ShiftLayerView: View {
         #endif
         .gesture(dragGesture)
         .help(helpText)
+        .contextMenu { dayMenuItems }
         #if os(macOS)
         .onContinuousHover { phase in
             switch phase {
@@ -617,13 +648,27 @@ private struct ShiftLayerView: View {
         #endif
     }
 
+    /// The menu for the column itself — bare track, or a ghost. Only the
+    /// day is on offer here, since nothing else was clicked. It's disabled
+    /// rather than absent on a day with no hours: an empty menu is worse
+    /// than a grayed-out one, which at least says the option exists.
+    ///
+    /// A capsule carries its own copy of this, with its own entry above it;
+    /// the innermost menu is the one that opens, so a right-click on a
+    /// block gets the block's.
+    @ViewBuilder
+    private var dayMenuItems: some View {
+        Button("Delete Day's Hours", role: .destructive) { onDeleteDay() }
+            .disabled(shifts.isEmpty)
+    }
+
     private var helpText: String {
         if shifts.isEmpty {
             return ghosts.isEmpty
                 ? "Click to open this day, or drag to record a shift"
                 : "Click an outline to add that shift, drag to draw one, or click the bar to open this day"
         }
-        return "Click to open this day. Drag a shift's edge to extend it — reach the next one and they merge. ⌥-click a shift to remove it."
+        return "Click to open this day. Drag a shift's edge to extend it — reach the next one and they merge. Right-click a block to delete it (⌥-click a shift does the same)."
     }
 
     /// The shifts as they should look right now: saved, except for the one
