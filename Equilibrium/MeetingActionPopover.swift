@@ -44,15 +44,26 @@ struct MeetingActionPopover: View {
                 .font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Named in full rather than counted. The row outside says
-            // "Sarah +4", which is what you scan; this is where you find out
-            // who the four are, and it's the usual reason for opening the
+            // Named rather than counted. The row outside says "Sarah +4",
+            // which is what you scan; this is where you find out who the
+            // four are, and it's the usual reason for opening the
             // invitation at all.
+            //
+            // Named up to a point, that is: an all-hands with sixty people
+            // on it turned this line into a wall of text taller than the
+            // popover, which pushed the two buttons off the bottom and told
+            // you nothing you could read. So the first few names are
+            // spelled out and the rest become a count, which is the same
+            // trade the row outside makes — the difference being that here
+            // you get several names instead of one.
             if !everyone.isEmpty {
-                Text(everyone.map(\.displayName).joined(separator: ", "))
+                Text(nameList)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    // The full list stays reachable, the same way it is on
+                    // the row: on the pointer, one name per line.
+                    .help(everyone.map(\.displayName).joined(separator: "\n"))
             }
 
             if meeting.joinURL == nil, !meeting.participants.isEmpty {
@@ -61,6 +72,24 @@ struct MeetingActionPopover: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// How many names are spelled out before the rest are counted. Six
+    /// fills about four lines at this width, which is as much of the
+    /// popover as the list can have without crowding the buttons under it.
+    private static let namesShown = 6
+
+    /// "Sarah, Tom, Jo, Ann, Ben, Kim… and 54 others".
+    ///
+    /// A remainder of one is written out instead of counted — "… and 1
+    /// other" costs more characters than the name it's hiding.
+    private var nameList: String {
+        let names = everyone.map(\.displayName)
+        guard names.count > Self.namesShown + 1 else {
+            return names.joined(separator: ", ")
+        }
+        let shown = names.prefix(Self.namesShown).joined(separator: ", ")
+        return "\(shown)… and \(names.count - Self.namesShown) others"
     }
 
     /// Organiser first, then everyone else — the order the invitation was
