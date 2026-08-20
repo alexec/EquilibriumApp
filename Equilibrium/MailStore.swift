@@ -103,16 +103,24 @@ final class MailStore {
     private let queue = DispatchQueue(label: "com.alexcollins.Equilibrium.mail", qos: .utility)
 
     /// Which account to read, or `nil` for Mail's unified inbox.
-    private var selectedAccountID: String?
+    ///
+    /// Read straight out of UserDefaults rather than cached in a stored
+    /// property, because the two sides of it are on different threads: the
+    /// picker in preferences writes from the main thread, and every script
+    /// this class builds reads on `queue`. A stored property would be a
+    /// plain data race, and the visible version of that race is worse than
+    /// the theoretical one — a fetch, an archive or a flag would use
+    /// whichever value happened to be in the field, which for something
+    /// whose entire job is "never read the other mailbox" is the one thing
+    /// it must not do. UserDefaults is thread-safe and this is read once
+    /// per script, so there is nothing to cache.
+    private var selectedAccountID: String? { MailAccountSelectionStore.load() }
 
-    private init() {
-        selectedAccountID = MailAccountSelectionStore.load()
-    }
+    private init() {}
 
     var selection: String? { selectedAccountID }
 
     func updateSelection(_ identifier: String?) {
-        selectedAccountID = identifier
         if let identifier {
             MailAccountSelectionStore.save(identifier)
         } else {
