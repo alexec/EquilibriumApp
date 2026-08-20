@@ -42,8 +42,8 @@ enum MeetingTimeFormat {
 /// went belong on screen together, particularly when looking back — so
 /// which button was clicked only decides which one is scrolled to.
 ///
-/// Neither is typed: both are dictated, so each field is a transcript with
-/// a microphone beside it rather than a text box (see `Dictation`).
+/// Each field can be typed or dictated — whichever fits — with a microphone
+/// beside it for when speaking is easier (see `Dictation`).
 struct DayDetailPanel: View {
     let day: Date
     let meetings: [DayMeeting]
@@ -125,6 +125,7 @@ struct DayDetailPanel: View {
                             text: $goals,
                             isListening: isListening(.goals),
                             onToggle: { toggleDictation(for: .goals, text: $goals) },
+                            onBeginEditing: { stopDictation() },
                             onClear: { clearField(.goals, text: $goals) }
                         )
                         .onChange(of: goals) { _ in scheduleSave() }
@@ -134,6 +135,7 @@ struct DayDetailPanel: View {
                             text: $outcomes,
                             isListening: isListening(.outcomes),
                             onToggle: { toggleDictation(for: .outcomes, text: $outcomes) },
+                            onBeginEditing: { stopDictation() },
                             onClear: { clearField(.outcomes, text: $outcomes) }
                         )
                         .onChange(of: outcomes) { _ in scheduleSave() }
@@ -148,6 +150,7 @@ struct DayDetailPanel: View {
                                 text: $reflection,
                                 isListening: isListening(.reflection),
                                 onToggle: { toggleDictation(for: .reflection, text: $reflection) },
+                                onBeginEditing: { stopDictation() },
                                 onClear: { clearField(.reflection, text: $reflection) },
                                 minimumLines: 3
                             )
@@ -407,6 +410,11 @@ struct DayDetailPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+    }
+
+    private func stopDictation() {
+        dictation.stop()
+        dictatingField = nil
     }
 
     /// Starts the microphone on a field, or stops it if that field is
