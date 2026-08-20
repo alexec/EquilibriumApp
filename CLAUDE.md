@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Equilibrium is a sandboxed macOS SwiftUI app (macOS 13+) that infers how many hours
 you worked each day from the Mac's sleep/wake events — as up to three shifts a day,
 morning, afternoon and evening — annotates those days with calendar meetings, and
-holds a dictated intention + check-in per day. README.md
-carries the product rationale and the "why not `pmset`/`log show`" history.
+holds a dictated intention + check-in per day. See `README.md` for the product
+rationale and the "why not `pmset`/`log show`" history.
 
 ## Build
 
@@ -27,7 +27,9 @@ CI (`.github/workflows/pr-build.yml`, macOS 15 runner) does the same with
 There is **no test target and no tests** — verification is building and running the
 app. Several helpers are deliberately pure and `internal` "for testability"
 (`WorkdayCalculator`, `WorkloadRecommender`, `WeeklySummaryNotifier.buildMessage`,
-`MeetingCalculator`, `WeekCalendar`), but nothing exercises them yet.
+`MeetingCalculator`, `WeekCalendar`, `ShiftPlan`) — the app calls them, but there is
+no test target to exercise them, so checking one means driving the app or building a
+throwaway harness against the source files.
 
 Signing comes from the environment, never from `project.yml` (a team baked in fails
 for anyone not in it). Unset, the build signs ad-hoc — which changes the code hash
