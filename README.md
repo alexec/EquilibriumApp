@@ -23,17 +23,29 @@ focus and to relax, and to get the right work-life balance.
   persisted to disk so history accumulates across app restarts.
 - Persists computed days to disk so history survives even after macOS
   rolls the underlying wake/sleep log off its own short retention window.
+- A day is up to three shifts — morning, afternoon and evening — and the
+  gaps between them are the breaks.  Lunch isn't worked time subtracted from
+  a longer block; it's simply the space where no shift is, which is why a
+  standard 9–12 / 1–5 day comes to seven hours rather than eight.
 - Shows one week at a time, styled after Apple Health's activity charts —
-  each day's bar spans its actual start-to-end time, scaled 6 AM–midnight,
-  colored gray normally and red on weekends or any day over 8 hours.
+  each shift a capsule at its actual times, scaled 6 AM–midnight, colored
+  gray normally and red on weekends or any day over seven hours.
 - Step back through earlier weeks by swiping two fingers across the chart,
   with ⌘[ and ⌘], or with the arrows above it — weeks slide in from the
   side they sit on.
-- Recommends how many hours to work on remaining days this week to land
-  on a 40-hour week — filling at 8h/day until the budget's used up, or
-  flagging when you're already over.
-- Days can be manually edited, overridden, or deleted, with an optional
-  30-minute-increment break duration subtracted from the displayed hours.
+- The shifts a day hasn't got are drawn as dashed ghosts at the hours they
+  normally occupy (9–12, 1–5, 6–10 by default).  Click one to put a real
+  shift there; drag its top edge to move the start, its bottom edge the end,
+  or its middle the whole thing.  Extend a shift until it reaches the next
+  and the two become one — which is how a day that turned out to have no
+  lunch in it gets recorded as such.  ⌥-click a shift to remove it, and drag
+  across bare column to draw one at times no template covers.
+- Recommends how many hours to work on remaining days this week to land on
+  a 35-hour week — seven hours a weekday, laid into the shifts in order, so
+  the ghosts on an untouched day show the morning and the afternoon and
+  leave the evening alone.  A week that's fallen behind reaches into the
+  evening by itself; a week already over budget says so instead.
+- Days can be manually edited, overridden, or deleted.
 - Every day carries a morning intention (the sun above its bar) and an
   end-of-day check-in (the moon below it), filled in once typed or spoken.
   Click either — on any day, not just today — to bring that day up in the panel

@@ -2,7 +2,7 @@ import Foundation
 import UserNotifications
 
 /// Fires a one-sentence Monday-morning digest notification once per ISO week:
-/// "Last week: 43h, 1 late night, longest day Tue 10.5h. Budget this week: 40h."
+/// "Last week: 38h, 1 late night, longest day Tue 10.5h. Budget this week: 35h."
 ///
 /// Takes `weeklyTargetHours` (from `WorkPreferences`) for the budget figure
 /// and guards against duplicate firing with a UserDefaults key.

@@ -11,26 +11,24 @@ import SwiftUI
 struct WorkPreferencesForm: View {
     @Binding var preferences: WorkPreferences
 
-    /// Offered as meeting/focus targets: half-hour steps, since that's the
-    /// resolution `HoursFormat` displays anyway.
-    private static let dailyHourOptions: [Double] = Array(stride(from: 0.5, through: 8.0, by: 0.5))
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             row("Hours a week") {
                 HStack(spacing: 6) {
                     Text(HoursFormat.string(preferences.weeklyTargetHours))
                         .font(.system(size: 12).monospacedDigit())
-                    Stepper("", value: $preferences.weeklyTargetHours, in: 5...80, step: 1)
+                    Stepper("", value: $preferences.weeklyTargetHours, in: WorkPreferences.weeklyTargetRange, step: 1)
                         .labelsHidden()
                 }
             }
 
-            row("Workday") {
-                HStack(spacing: 4) {
-                    hourPicker(selection: startHour, range: 0..<24)
-                    Text("to").font(.system(size: 12)).foregroundColor(.secondary)
-                    hourPicker(selection: endHour, range: 1..<25)
+            ForEach(Array(preferences.shifts.enumerated()), id: \.element.id) { index, shift in
+                row(shift.slot.label) {
+                    HStack(spacing: 4) {
+                        hourPicker(selection: startHour(at: index), range: 0..<24)
+                        Text("to").font(.system(size: 12)).foregroundColor(.secondary)
+                        hourPicker(selection: endHour(at: index), range: 1..<25)
+                    }
                 }
             }
 
@@ -67,7 +65,7 @@ struct WorkPreferencesForm: View {
     private func optionalHoursPicker(selection: Binding<Double?>) -> some View {
         Picker("", selection: selection) {
             Text("Not set").tag(Double?.none)
-            ForEach(Self.dailyHourOptions, id: \.self) { hours in
+            ForEach(WorkPreferences.dailyHoursOptions, id: \.self) { hours in
                 Text(HoursFormat.string(hours)).tag(Double?.some(hours))
             }
         }
@@ -75,28 +73,28 @@ struct WorkPreferencesForm: View {
         .fixedSize()
     }
 
-    /// Start and end are edited through bindings that keep the workday at
+    /// Start and end are edited through bindings that keep each shift at
     /// least an hour long, rather than letting the two pickers cross over
-    /// into an end-before-start span that nothing downstream can draw.
-    private var startHour: Binding<Double> {
+    /// into an end-before-start slot that nothing downstream can draw.
+    private func startHour(at index: Int) -> Binding<Double> {
         Binding(
-            get: { preferences.workdayStartHour },
+            get: { preferences.shifts[index].startHour },
             set: { newValue in
-                preferences.workdayStartHour = newValue
-                if preferences.workdayEndHour <= newValue {
-                    preferences.workdayEndHour = newValue + 1
+                preferences.shifts[index].startHour = newValue
+                if preferences.shifts[index].endHour <= newValue {
+                    preferences.shifts[index].endHour = min(newValue + 1, 24)
                 }
             }
         )
     }
 
-    private var endHour: Binding<Double> {
+    private func endHour(at index: Int) -> Binding<Double> {
         Binding(
-            get: { preferences.workdayEndHour },
+            get: { preferences.shifts[index].endHour },
             set: { newValue in
-                preferences.workdayEndHour = newValue
-                if preferences.workdayStartHour >= newValue {
-                    preferences.workdayStartHour = newValue - 1
+                preferences.shifts[index].endHour = newValue
+                if preferences.shifts[index].startHour >= newValue {
+                    preferences.shifts[index].startHour = max(newValue - 1, 0)
                 }
             }
         )

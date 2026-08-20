@@ -1,16 +1,18 @@
 import Foundation
 
-/// Groups wake events into contiguous workday blocks. A new block starts
-/// when the gap since the previous wake is >= 8 hours; otherwise the wake
-/// extends the current block. A block's end time is the sleep event that
+/// Groups wake events into workdays, and each workday into shifts. A new
+/// day starts when the gap since the previous wake is >= 8 hours; otherwise
+/// the wake extends the current day.  A day's end is the sleep event that
 /// immediately follows its last wake (when the machine actually went to
 /// sleep), falling back to the last wake itself if no such sleep was logged.
 ///
-/// Intra-day gaps: sleep/wake pairs whose gap is >= `intraBreakThreshold`
-/// but < `gapThreshold` are treated as breaks within the same workday and
-/// summed into `WorkdaySpan.intraBreakMinutes`. The longest uninterrupted
-/// active stretch and whether a proper lunch break was taken are also
-/// computed and stored on the span.
+/// Within a day, a sleep/wake gap of `shiftGapThreshold` or more ends one
+/// shift and starts the next — that's lunch, or the break before an evening
+/// stint. Shorter gaps (>= `intraBreakThreshold`) are too brief to be a
+/// shift boundary and are summed into `WorkdaySpan.intraBreakMinutes`
+/// instead, still deducted but without pretending to split the day. The
+/// longest uninterrupted active stretch and whether a proper lunch break was
+/// taken are also computed and stored on the day.
 enum WorkdayCalculator {
     static let gapThreshold: TimeInterval = 8 * 3600
 
@@ -20,6 +22,12 @@ enum WorkdayCalculator {
     /// Minimum gap counted as a "real" lunch/rest break (30 minutes).
     static let lunchBreakThreshold: TimeInterval = 30 * 60
 
+    /// Minimum gap that ends a shift and begins another (45 minutes). Above
+    /// the length of a long coffee and below a real lunch: a break that
+    /// splits the day into two shifts should be one you actually went
+    /// somewhere for, not every time the screen locked itself.
+    static let shiftGapThreshold: TimeInterval = 45 * 60
+
     static func computeSpans(from events: [PowerEvent], calendar: Calendar = .current) -> [WorkdaySpan] {
         let wakes = events.filter { $0.kind == .wake }.map(\.date).sorted()
         let sleeps = events.filter { $0.kind == .sleep }.map(\.date).sorted()
@@ -28,12 +36,15 @@ enum WorkdayCalculator {
         var lastWake = blockStart
         var previous = blockStart
 
-        // Intra-day break accumulator for the current block.
+        // Break accumulator for gaps too short to split a shift.
         var intraBreakSeconds: TimeInterval = 0
         var intraBreakHasLunch = false
         // Gaps (active stretches) for longest-stretch calculation.
         var stretchStart = blockStart    // start of current active stretch
         var longestStretchSeconds: TimeInterval = 0
+        // Shifts closed so far today, and where the open one began.
+        var segments: [WorkShift] = []
+        var segmentStart = blockStart
 
         var spans: [WorkdaySpan] = []
 
@@ -48,14 +59,19 @@ enum WorkdayCalculator {
             if finalStretch > longestStretchSeconds {
                 longestStretchSeconds = finalStretch
             }
+            if end > segmentStart {
+                segments.append(WorkShift(start: segmentStart, end: end))
+            }
 
-            let breakMins = Int((intraBreakSeconds / 60).rounded())
+            // A day that ended up with more stretches than a day is allowed
+            // to hold gives its narrowest gaps back as deducted break time.
+            let (shifts, absorbedMinutes) = ShiftPlan.normalize(segments)
+            let breakMins = Int((intraBreakSeconds / 60).rounded()) + absorbedMinutes
             let longestMins = Int((longestStretchSeconds / 60).rounded())
 
             spans.append(WorkdaySpan(
                 dayKey: dayKey(for: blockStart, calendar: calendar),
-                start: blockStart,
-                end: end,
+                shifts: shifts,
                 intraBreakMinutes: breakMins,
                 longestStretchMinutes: longestMins,
                 hasLunchBreak: intraBreakHasLunch
@@ -70,6 +86,8 @@ enum WorkdayCalculator {
             intraBreakHasLunch = false
             stretchStart = wake
             longestStretchSeconds = 0
+            segments = []
+            segmentStart = wake
         }
 
         for wake in wakes.dropFirst() {
@@ -82,25 +100,34 @@ enum WorkdayCalculator {
                 // so we measure only the actual idle/sleep interval (sleep→wake)
                 // rather than the full wake→wake gap which includes active time.
                 let breakDuration: TimeInterval
+                let stretchEnd: Date
                 if let sleepBeforeWake = sleeps.last(where: { $0 > previous && $0 < wake }) {
                     breakDuration = wake.timeIntervalSince(sleepBeforeWake)
                     // Active stretch ended at the sleep event, not at the previous wake.
-                    let stretchLen = sleepBeforeWake.timeIntervalSince(stretchStart)
-                    if stretchLen > longestStretchSeconds {
-                        longestStretchSeconds = stretchLen
-                    }
+                    stretchEnd = sleepBeforeWake
                 } else {
                     // No sleep event logged; fall back to the full wake-to-wake gap.
                     breakDuration = gap
-                    let stretchLen = previous.timeIntervalSince(stretchStart)
-                    if stretchLen > longestStretchSeconds {
-                        longestStretchSeconds = stretchLen
-                    }
+                    stretchEnd = previous
+                }
+                let stretchLen = stretchEnd.timeIntervalSince(stretchStart)
+                if stretchLen > longestStretchSeconds {
+                    longestStretchSeconds = stretchLen
                 }
                 if breakDuration >= intraBreakThreshold {
-                    intraBreakSeconds += breakDuration
                     if breakDuration >= lunchBreakThreshold {
                         intraBreakHasLunch = true
+                    }
+                    if breakDuration >= shiftGapThreshold {
+                        // Long enough to be a break you went somewhere for:
+                        // the shift ends here and the next one starts on the
+                        // other side of it.
+                        if stretchEnd > segmentStart {
+                            segments.append(WorkShift(start: segmentStart, end: stretchEnd))
+                        }
+                        segmentStart = wake
+                    } else {
+                        intraBreakSeconds += breakDuration
                     }
                 }
                 stretchStart = wake

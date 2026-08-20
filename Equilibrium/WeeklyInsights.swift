@@ -18,7 +18,7 @@ enum WeeklyInsights {
         calendar: Calendar = .current
     ) -> Int {
         spans.compactMap { $0 }.filter { span in
-            guard span.hours > 0 else { return false }
+            guard !span.shifts.isEmpty else { return false }
             let hour = calendar.component(.hour, from: span.end)
             return hour >= lateNightHour
         }.count
@@ -48,7 +48,7 @@ enum WeeklyInsights {
         calendar: Calendar = .current
     ) -> Double? {
         let hours: [Double] = spans.compactMap { span -> Double? in
-            guard let span, span.hours > 0 else { return nil }
+            guard let span, !span.shifts.isEmpty else { return nil }
             let comps = calendar.dateComponents([.hour, .minute], from: span.start)
             guard let h = comps.hour, let m = comps.minute else { return nil }
             return Double(h) + Double(m) / 60.0

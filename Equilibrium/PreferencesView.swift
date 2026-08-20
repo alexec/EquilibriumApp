@@ -38,7 +38,7 @@ struct PreferencesView: View {
     /// re-querying the framework mid-layout would be needless work.
     private let modelUnavailability: OnDeviceModel.Unavailability?
 
-    private static let examplePrompt = "I'd like to work a balanced 9-5 week with 3h of meetings a day, and 5h of focus time."
+    private static let examplePrompt = "I'd like to work 9 to 5 with an hour for lunch, 3h of meetings a day, and 5h of focus time."
 
     init(
         current: WorkPreferences,
