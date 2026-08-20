@@ -29,6 +29,15 @@ enum ChartScale {
         return fraction(of: hour)
     }
 
+    /// The same, but measured against the day the bar belongs to rather
+    /// than read off the clock. The midnight that *ends* a day is stored as
+    /// the start of the next one, which `fraction(of:)` above sees as 00:00
+    /// and puts at the top of the chart — so a shift running to midnight
+    /// was drawn as a stub at its own start instead of reaching the bottom.
+    static func fraction(of date: Date, onDayStarting midnight: Date) -> Double {
+        fraction(of: date.timeIntervalSince(midnight) / 3600.0)
+    }
+
     /// Seconds of real time represented by one point of `chartHeight`, on
     /// this scale — used to convert a drag's point-delta into a time delta.
     static func secondsPerPoint(chartHeight: CGFloat) -> Double {
