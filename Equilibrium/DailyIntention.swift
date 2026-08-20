@@ -54,8 +54,14 @@ struct DayMeeting: Identifiable, Equatable {
     /// `MeetingLinks`). Nil for meetings that are just a room and a time.
     var joinURL: URL?
     /// EventKit's identifier for the event, so Calendar can be asked to
-    /// show this one rather than just the day.
+    /// show this one rather than just the day — and so it can be deleted.
+    /// Shared by every occurrence of a repeating meeting, which is why
+    /// `CalendarStore.delete` wants the start time as well.
     var eventIdentifier: String?
+    /// Whether this is one occurrence of a repeating meeting. Only the
+    /// delete confirmation asks: it's the difference between removing this
+    /// Thursday's standup and removing every standup from here on.
+    var isRecurring: Bool = false
     /// Who called the meeting. Nil for an event you made yourself, which
     /// EventKit leaves without an organiser.
     var organizer: Person?

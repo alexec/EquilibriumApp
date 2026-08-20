@@ -91,6 +91,8 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published private(set) var dayBriefFallback: String = ""
     /// Why the last archive didn't happen, when it didn't.
     @Published private(set) var archiveProblem: String?
+    /// Why the last meeting deletion didn't happen, when it didn't.
+    @Published private(set) var meetingDeleteProblem: String?
     /// When each deferred message should come back, by message id. Read
     /// from Reminders rather than owned here.
     @Published private(set) var mailDeferrals: [String: Date] = [:]
@@ -174,9 +176,13 @@ final class WorkHistoryViewModel: ObservableObject {
     /// because gathering it is seven EventKit queries and the strip is
     /// rebuilt on every day click.
     private var weekMeetings: [DayMeeting] = []
-    /// Guards against a timer refresh starting while a manual one is still
-    /// working through the inbox — the model pass takes seconds per message.
+    /// Whether a trip to Mail is under way, so a second one doesn't start
+    /// on top of it — the model pass alone takes seconds per message.
     private var isRefreshingMail = false
+    /// Whether a refresh was asked for while one was already running, so
+    /// the running one goes round again instead of the request being lost.
+    /// See `refreshMail`.
+    private var mailRefreshQueued = false
 
     private let dayKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -790,6 +796,45 @@ final class WorkHistoryViewModel: ObservableObject {
         return CalendarStore.shared.dayMeetings(on: day)
     }
 
+    /// Takes a meeting out of the calendar.
+    ///
+    /// Note what this isn't: a decline. Nothing reachable from a sandboxed
+    /// app can answer an invitation — see `CalendarStore.delete` for why —
+    /// so the organiser is none the wiser, and the popover says as much
+    /// before it does this.
+    ///
+    /// A full `refreshMeetingData` afterwards rather than dropping the row
+    /// locally, because a deleted meeting changes more than the list it was
+    /// in: the day's meeting hours, the bar behind them, the week's caption
+    /// and the people strip all read from it. Days with hand-dragged
+    /// meeting blocks keep theirs, by the same rule that governs every
+    /// other refresh.
+    func deleteMeeting(_ meeting: DayMeeting, scope: CalendarStore.DeletionScope) async {
+        guard let identifier = meeting.eventIdentifier else {
+            // A meeting EventKit never gave an identifier to isn't one it
+            // can be asked to remove. Rare enough that the honest sentence
+            // is better than a disabled button nobody can explain.
+            meetingDeleteProblem = "Calendar doesn't recognise that meeting, so it was left alone."
+            return
+        }
+
+        switch CalendarStore.shared.delete(
+            eventIdentifier: identifier,
+            startingAt: meeting.start,
+            scope: scope
+        ) {
+        case .deleted, .notFound:
+            // Gone either way, so both end with the same refresh: one of
+            // them deleted it, the other found somebody already had.
+            meetingDeleteProblem = nil
+            await refreshMeetingData()
+        case .readOnly:
+            meetingDeleteProblem = "That calendar is read-only, so the meeting is still there."
+        case .failed:
+            meetingDeleteProblem = "Calendar wouldn't delete that meeting."
+        }
+    }
+
     /// Writes a day's intention and check-in together, since the panel
     /// edits both at once.
     ///
@@ -837,6 +882,10 @@ final class WorkHistoryViewModel: ObservableObject {
 
     func selectDay(_ day: Date, kind: DailyPromptKind) {
         dayEditor = DayEditorSelection(day: calendar.startOfDay(for: day), kind: kind)
+        // Why a meeting on Tuesday couldn't be deleted isn't news about
+        // Wednesday, and the panel it was written under is about to show a
+        // different day's meetings.
+        meetingDeleteProblem = nil
         refreshMeetingGist()
         refreshDerivedMailState()
     }
@@ -858,30 +907,54 @@ final class WorkHistoryViewModel: ObservableObject {
     /// second or two, forty of them is a minute, and a column that fills in
     /// row by row is honest about that in a way a spinner isn't.
     func refreshMail() async {
-        guard !isRefreshingMail else { return }
+        // A request arriving while one is already running is remembered
+        // rather than dropped. Dropping it was fine for the timer, which
+        // would come round again in five minutes, and quietly wrong for
+        // the one case that matters: choosing a different account in
+        // preferences almost always lands on top of the trip to Mail that
+        // launch or the timer started, so the column that had just been
+        // emptied stayed empty until the next tick.
+        guard !isRefreshingMail else {
+            mailRefreshQueued = true
+            return
+        }
         isRefreshingMail = true
         defer { isRefreshingMail = false }
 
-        switch await MailStore.shared.fetch() {
-        case .failed(let state):
-            mailAccess = state
-            // Messages already on screen are left alone. A refusal or a
-            // busy Mail is a fact about this attempt, not about the mail —
-            // blanking the column on a failed poll would make a working
-            // inbox flicker away every time Mail was mid-sync.
-        case .fetched(let fetch):
-            mailAccess = .granted
-            // Read alongside the inbox rather than when preferences opens:
-            // the picker is behind a popover that has to draw immediately,
-            // and a trip to Mail takes seconds.
-            mailAccounts = await MailStore.shared.accounts()
-            mailMessages = fetch.messages
-            myAddresses = fetch.myAddresses
-            await refreshDeferrals()
-            await summariseNewMail()
-            refreshDerivedMailState()
-            await refreshDayBrief()
-        }
+        repeat {
+            mailRefreshQueued = false
+            // Which account this pass is about to read. Mail is talked to
+            // on one serial queue and a fetch takes seconds, so an answer
+            // can easily arrive after the account was changed — carrying
+            // the *other* mailbox's messages, which is precisely what
+            // picking an account is meant to prevent. It's thrown away in
+            // that case; the change queued a refresh of its own, so the
+            // loop goes round and reads the account that's now selected.
+            let account = mailSelection
+            let result = await MailStore.shared.fetch()
+            guard account == mailSelection else { continue }
+
+            switch result {
+            case .failed(let state):
+                mailAccess = state
+                // Messages already on screen are left alone. A refusal or a
+                // busy Mail is a fact about this attempt, not about the mail —
+                // blanking the column on a failed poll would make a working
+                // inbox flicker away every time Mail was mid-sync.
+            case .fetched(let fetch):
+                mailAccess = .granted
+                // Read alongside the inbox rather than when preferences opens:
+                // the picker is behind a popover that has to draw immediately,
+                // and a trip to Mail takes seconds.
+                mailAccounts = await MailStore.shared.accounts()
+                mailMessages = fetch.messages
+                myAddresses = fetch.myAddresses
+                await refreshDeferrals()
+                await summariseNewMail()
+                refreshDerivedMailState()
+                await refreshDayBrief()
+            }
+        } while mailRefreshQueued
     }
 
     /// Summarises every message without a stored summary, oldest first so
