@@ -20,7 +20,30 @@ import SwiftUI
 struct PeopleStrip: View {
     static let height: CGFloat = 110
 
+    /// How many people the strip will draw before it stops counting.
+    ///
+    /// A busy week runs to hundreds of addresses — every cc line on every
+    /// message, every room full of attendees — and drawing all of them
+    /// turns a glance into a directory: the people who actually asked
+    /// something of you end up at the top of a scroll view several screens
+    /// long, which is the same failure as the horizontal row, just
+    /// rotated. Twenty is roughly what fits in three or four wrapped lines,
+    /// so the ordering `PeopleDirectory` establishes stays visible in one
+    /// or two flicks.
+    ///
+    /// The cap lives here rather than in `PeopleDirectory` because it's a
+    /// fact about how much room this panel has, not about who is in your
+    /// week; the rule stays whole and anything else that reads it gets
+    /// everybody.
+    static let maximumPeople = 20
+
     let people: [PersonActivity]
+
+    /// Whoever the cap left out. Counted rather than silently dropped: a
+    /// list that stops without saying so reads as the complete answer, and
+    /// "who am I working with" is exactly the question where a wrong
+    /// complete answer matters.
+    private var hiddenCount: Int { max(0, people.count - Self.maximumPeople) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -40,8 +63,11 @@ struct PeopleStrip: View {
             } else {
                 ScrollView(.vertical, showsIndicators: true) {
                     FlowLayout(spacing: 8, lineSpacing: 6) {
-                        ForEach(people) { activity in
+                        ForEach(people.prefix(Self.maximumPeople)) { activity in
                             PersonChip(activity: activity)
+                        }
+                        if hiddenCount > 0 {
+                            MorePeopleChip(count: hiddenCount)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -50,6 +76,32 @@ struct PeopleStrip: View {
             }
         }
         .frame(height: Self.height, alignment: .topLeading)
+    }
+}
+
+/// The tail of the list, as one chip. Deliberately not a chip you can
+/// press to expand: the people past the twentieth are the ones who were
+/// copied in once, and a control that fills the strip with them is a
+/// control for undoing the truncation.
+private struct MorePeopleChip: View {
+    let count: Int
+
+    var body: some View {
+        Text("+\(count) more")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(height: 30)
+            .background(Capsule().fill(Color.secondary.opacity(0.05)))
+            .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.15), lineWidth: 1))
+            .help(label)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        "\(count) more \(count == 1 ? "person was" : "people were") on this week's messages or in its meetings"
     }
 }
 
