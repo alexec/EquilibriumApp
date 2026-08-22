@@ -30,24 +30,20 @@ final class WorkHistoryStore {
     /// are only added if not already present, since old entries won't
     /// recompute once their source wake events age out of `LiveEventStore`'s
     /// 30-day retention window.
+    ///
+    /// A fresh span carries no meetings, so an overwritten day loses the
+    /// ones it was showing until `refreshMeetingData()` runs — which it
+    /// does immediately after, in the same `refresh()`, reading them back
+    /// out of the calendar they came from. Days that had been flagged
+    /// `meetingsManuallyEdited` used to be exempted here, carrying their
+    /// hand-dragged blocks through the recompute; meetings are the
+    /// calendar's to describe now, so there's nothing to carry.
     func merge(freshSpans: [WorkdaySpan], today: String, yesterday: String) -> [String: WorkdaySpan] {
         var stored = load()
         for span in freshSpans {
             if stored[span.dayKey]?.isManual == true { continue }
             if span.dayKey == today || span.dayKey == yesterday || stored[span.dayKey] == nil {
-                var newSpan = span
-                // Hand-dragged meetings survive the automatic recompute —
-                // only start/end/break come from the fresh wake-data pass.
-                // (refreshMeetingData() itself also skips days flagged
-                // meetingsManuallyEdited, but that runs later than this
-                // merge, so without carrying these over too the day would
-                // flash back to empty meetings in between.)
-                if let existing = stored[span.dayKey], existing.meetingsManuallyEdited {
-                    newSpan.meetings = existing.meetings
-                    newSpan.meetingsManuallyEdited = true
-                    newSpan.hasCalendarData = existing.hasCalendarData
-                }
-                stored[span.dayKey] = newSpan
+                stored[span.dayKey] = span
             }
         }
         save(stored)

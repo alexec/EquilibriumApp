@@ -71,10 +71,11 @@ week" marker go in UserDefaults.
 
 ### Rules the data layer enforces
 
-- **Manual edits win.** `WorkdaySpan.isManual` blocks automatic recompute of that
-  day entirely; `meetingsManuallyEdited` blocks calendar refresh from overwriting
-  hand-dragged meeting blocks. `WorkHistoryStore.merge` and
-  `WorkHistoryViewModel.refreshMeetingData` each re-check these independently.
+- **Manual edits win — over shifts only.** `WorkdaySpan.isManual` blocks automatic
+  recompute of that day entirely, and `WorkHistoryStore.merge` re-checks it.
+  Meetings are not editable and have no equivalent flag: they're annotations read
+  back out of EventKit on every `refreshMeetingData`, so the calendar is the only
+  thing that decides where a meeting block sits.
 - **History is append-mostly.** `merge` overwrites only today and yesterday; older
   days are added if absent but never recomputed, because their source power events
   age out of the 30-day retention window.
@@ -226,7 +227,7 @@ comments.
   closes the duplicate.
 - `WeekSwipe` uses a local AppKit event monitor with `hitTest` returning nil — a view
   in front to catch two-finger scrolls would also swallow the clicks that drag
-  meeting blocks.
+  shift capsules.
 - `WindowDragBlocker` in `DayBar.swift` exists because the window is
   `isMovableByWindowBackground` (hidden title bar), which otherwise steals drags.
 
