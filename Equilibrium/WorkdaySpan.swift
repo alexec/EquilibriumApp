@@ -73,12 +73,6 @@ struct WorkdaySpan: Codable, Identifiable {
     /// processes this day.
     var hasCalendarData: Bool = false
 
-    /// True once any meeting on this day has been hand-dragged (resized or
-    /// moved). While true, calendar refreshes leave `meetings` alone
-    /// rather than overwriting your edits — see `WorkHistoryViewModel`'s
-    /// `updateMeeting`/`resetMeetings`.
-    var meetingsManuallyEdited: Bool = false
-
     /// Break minutes that couldn't be expressed as a gap between shifts:
     /// pre-shift history's auto-detected intra-day breaks, and gaps closed
     /// by `ShiftPlan.normalize` folding a day of four or more stretches down
@@ -160,7 +154,6 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual: Bool = false,
         meetings: [MeetingBlock] = [],
         hasCalendarData: Bool = false,
-        meetingsManuallyEdited: Bool = false,
         intraBreakMinutes: Int = 0,
         longestStretchMinutes: Int = 0,
         hasLunchBreak: Bool = false
@@ -171,15 +164,20 @@ struct WorkdaySpan: Codable, Identifiable {
         self.isManual = isManual
         self.meetings = meetings
         self.hasCalendarData = hasCalendarData
-        self.meetingsManuallyEdited = meetingsManuallyEdited
         self.intraBreakMinutes = intraBreakMinutes
         self.longestStretchMinutes = longestStretchMinutes
         self.hasLunchBreak = hasLunchBreak
     }
 
+    /// `meetingsManuallyEdited` was one of these, written by days whose
+    /// meeting blocks had been dragged about. Meetings are read-only now,
+    /// so it has no key at all: an old file still loads — an unrecognised
+    /// key is simply ignored — and the flag it carries goes for good the
+    /// next time that day is written, which is the point, since while it
+    /// was set no calendar refresh could touch the day.
     private enum CodingKeys: String, CodingKey {
         case dayKey, shifts, breakMinutes, isManual, meetings, hasCalendarData
-        case meetingsManuallyEdited, intraBreakMinutes, longestStretchMinutes, hasLunchBreak
+        case intraBreakMinutes, longestStretchMinutes, hasLunchBreak
         /// Pre-shift history: one contiguous block per day, read on the way
         /// in and never written again.
         case start, end
@@ -193,7 +191,6 @@ struct WorkdaySpan: Codable, Identifiable {
         try container.encode(isManual, forKey: .isManual)
         try container.encode(meetings, forKey: .meetings)
         try container.encode(hasCalendarData, forKey: .hasCalendarData)
-        try container.encode(meetingsManuallyEdited, forKey: .meetingsManuallyEdited)
         try container.encode(intraBreakMinutes, forKey: .intraBreakMinutes)
         try container.encode(longestStretchMinutes, forKey: .longestStretchMinutes)
         try container.encode(hasLunchBreak, forKey: .hasLunchBreak)
@@ -206,7 +203,6 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual = try container.decodeIfPresent(Bool.self, forKey: .isManual) ?? false
         meetings = try container.decodeIfPresent([MeetingBlock].self, forKey: .meetings) ?? []
         hasCalendarData = try container.decodeIfPresent(Bool.self, forKey: .hasCalendarData) ?? false
-        meetingsManuallyEdited = try container.decodeIfPresent(Bool.self, forKey: .meetingsManuallyEdited) ?? false
         intraBreakMinutes = try container.decodeIfPresent(Int.self, forKey: .intraBreakMinutes) ?? 0
         longestStretchMinutes = try container.decodeIfPresent(Int.self, forKey: .longestStretchMinutes) ?? 0
         hasLunchBreak = try container.decodeIfPresent(Bool.self, forKey: .hasLunchBreak) ?? false

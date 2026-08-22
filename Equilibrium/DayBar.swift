@@ -43,7 +43,7 @@ struct GhostShift: Identifiable {
 ///
 /// Meetings (real calendar times) are drawn as separate blocks on top
 /// (yellow normally; a lighter red on fiery days so they stay compatible
-/// with the shift capsules), each independently drag-editable — see
+/// with the shift capsules). They're annotations, not controls — see
 /// `MeetingBlockView`. There's no "focus" segment: it was always a derived
 /// guess (effective hours minus meetings), never a directly known quantity.
 struct DayBar: View {
@@ -64,9 +64,6 @@ struct DayBar: View {
     /// day is opened in the side panel. A click on a ghost is not one of
     /// these: that outline is an offer, and accepting it is what it's for.
     var onSelect: () -> Void = {}
-    /// Called with a meeting's id and its new (start, end) once a drag
-    /// (resize-top, resize-bottom, or move) ends.
-    var onMeetingChange: (UUID, Date, Date) -> Void = { _, _, _ in }
     /// Called with a shift's id and its new (start, end) once a drag on it
     /// ends.
     var onShiftChange: (UUID, Date, Date) -> Void = { _, _, _ in }
@@ -74,8 +71,6 @@ struct DayBar: View {
     var onShiftAdd: (Date, Date) -> Void = { _, _ in }
     /// Called when a shift is ⌥-clicked, or deleted from its menu.
     var onShiftRemove: (UUID) -> Void = { _ in }
-    /// Called when a meeting is deleted from its menu.
-    var onMeetingRemove: (UUID) -> Void = { _ in }
     /// Called when the whole day's hours are deleted from a menu — the same
     /// thing the hover trash under the column does.
     var onDeleteDay: () -> Void = {}
@@ -172,7 +167,6 @@ struct DayBar: View {
             // Meetings render even on days with no shifts yet (future week
             // days get an empty span that only holds calendar blocks).
             if let span, !span.meetings.isEmpty {
-                let (clampStart, clampEnd) = meetingClampBounds(for: span, day: day)
                 let fireIntensity = DayFire.intensity(hours: span.roundedUpHours, isWeekend: isWeekend)
                 ForEach(span.meetings) { meeting in
                     MeetingBlockView(
@@ -180,14 +174,7 @@ struct DayBar: View {
                         chartHeight: chartHeight,
                         barWidth: barWidth,
                         dayMidnight: calendar.startOfDay(for: day),
-                        dayStart: clampStart,
-                        dayEnd: clampEnd,
-                        color: DayFire.meetingColor(intensity: fireIntensity),
-                        onSelect: onSelect,
-                        onRemove: { onMeetingRemove(meeting.id) },
-                        onChange: { newStart, newEnd in
-                            onMeetingChange(meeting.id, newStart, newEnd)
-                        }
+                        color: DayFire.meetingColor(intensity: fireIntensity)
                     )
                 }
             }
@@ -196,28 +183,16 @@ struct DayBar: View {
         .frame(width: barWidth + (showsWorkdayTrack ? 10 : 4), height: chartHeight, alignment: .top)
         .contentShape(Rectangle())
     }
-
-    /// Drag bounds for meetings: the day's worked envelope when there is
-    /// one, otherwise the chart's 6am–midnight window so future-day
-    /// meetings stay editable.
-    private func meetingClampBounds(for span: WorkdaySpan, day: Date) -> (Date, Date) {
-        if !span.shifts.isEmpty {
-            return (span.start, span.end)
-        }
-        let startOfDay = calendar.startOfDay(for: day)
-        let start = calendar.date(
-            bySettingHour: Int(ChartScale.startHour), minute: 0, second: 0, of: startOfDay
-        ) ?? startOfDay
-        let end = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
-        return (start, end)
-    }
 }
 
-/// A single meeting, drawn at its real start/end time and drag-editable
-/// like an event in a calendar day view. Blocks longer than 2h support
-/// three-way edit (top = start, bottom = end, middle = move). Short
-/// blocks (≤2h) are resize-only — top half moves `start`, bottom half
-/// moves `end` — since there's no room for a distinct move strip.
+/// A single meeting, drawn at its real start/end time.
+///
+/// Purely an annotation: the calendar says when a meeting happens, and
+/// nothing here can move, resize or delete one. It doesn't take presses
+/// either — every click in a column belongs to the shift layer underneath,
+/// so clicking a meeting opens the day in the side panel exactly as
+/// clicking the track beside it does, and a shift edge hiding under a
+/// meeting block stays draggable.
 private struct MeetingBlockView: View {
     let meeting: MeetingBlock
     let chartHeight: CGFloat
@@ -226,158 +201,28 @@ private struct MeetingBlockView: View {
     /// running to midnight reaches the bottom of the chart rather than
     /// being read as the 00:00 that starts a day.
     let dayMidnight: Date
-    let dayStart: Date
-    let dayEnd: Date
     let color: Color
-    let onSelect: () -> Void
-    let onRemove: () -> Void
-    let onChange: (Date, Date) -> Void
 
-    private enum DragMode {
-        case moveWhole, resizeTop, resizeBottom
-    }
-
-    @State private var dragMode: DragMode?
-    @State private var dragPointsDelta: CGFloat = 0
-
-    /// Below this a press is a click rather than a drag. It used to be
-    /// committed as an edit of unchanged times — which snapped the meeting
-    /// to five minutes and marked the day hand-edited, quietly stopping
-    /// calendar refreshes, all for a stray click. Now it opens the day.
-    private static let tapSlop: CGFloat = 4
-    private static let edgeHandleHeight: CGFloat = 6
     private static let minBlockHeight: CGFloat = 6
-    /// Meetings at or under this duration skip the middle move handle and
-    /// split the whole block into top/bottom resize halves.
-    private static let resizeOnlyMaxHours: Double = 2
-
-    private var secondsPerPoint: Double {
-        ChartScale.secondsPerPoint(chartHeight: chartHeight)
-    }
-
-    private var isResizeOnly: Bool {
-        meeting.end.timeIntervalSince(meeting.start) <= Self.resizeOnlyMaxHours * 3600
-    }
-
-    private var displayedStart: Date {
-        guard dragMode == .resizeTop || dragMode == .moveWhole else { return meeting.start }
-        let candidate = meeting.start.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
-        return min(max(candidate, dayStart), dayEnd)
-    }
-
-    private var displayedEnd: Date {
-        guard dragMode == .resizeBottom || dragMode == .moveWhole else { return meeting.end }
-        let candidate = meeting.end.addingTimeInterval(Double(dragPointsDelta) * secondsPerPoint)
-        return min(max(candidate, dayStart), dayEnd)
-    }
 
     var body: some View {
-        let topOffset = CGFloat(ChartScale.fraction(of: displayedStart, onDayStarting: dayMidnight)) * chartHeight
-        let bottomOffset = CGFloat(ChartScale.fraction(of: displayedEnd, onDayStarting: dayMidnight)) * chartHeight
+        let topOffset = CGFloat(ChartScale.fraction(of: meeting.start, onDayStarting: dayMidnight)) * chartHeight
+        let bottomOffset = CGFloat(ChartScale.fraction(of: meeting.end, onDayStarting: dayMidnight)) * chartHeight
         let height = max(bottomOffset - topOffset, Self.minBlockHeight)
 
-        ZStack(alignment: .top) {
-            Capsule()
-                .fill(color)
-                .frame(width: barWidth, height: height)
-                // From the displayed times rather than the stored ones, so
-                // the number counts up under the pointer while the block is
-                // being dragged instead of jumping on release.
-                .overlay(
-                    CapsuleHoursLabel(
-                        hours: displayedEnd.timeIntervalSince(displayedStart) / 3600.0,
-                        capsuleHeight: height,
-                        width: barWidth,
-                        color: DayFire.meetingLabelColor
-                    )
+        Capsule()
+            .fill(color)
+            .frame(width: barWidth, height: height)
+            .overlay(
+                CapsuleHoursLabel(
+                    hours: meeting.end.timeIntervalSince(meeting.start) / 3600.0,
+                    capsuleHeight: height,
+                    width: barWidth,
+                    color: DayFire.meetingLabelColor
                 )
-
-            if isResizeOnly {
-                let half = height / 2
-                dragHandle(mode: .resizeTop, height: half)
-                dragHandle(mode: .resizeBottom, height: half)
-                    .offset(y: half)
-            } else {
-                dragHandle(mode: .resizeTop, height: Self.edgeHandleHeight)
-                dragHandle(mode: .moveWhole, height: height - 2 * Self.edgeHandleHeight)
-                    .offset(y: Self.edgeHandleHeight)
-                dragHandle(mode: .resizeBottom, height: Self.edgeHandleHeight)
-                    .offset(y: height - Self.edgeHandleHeight)
-            }
-        }
-        .frame(width: barWidth, height: height, alignment: .top)
-        // On the block rather than on the bar underneath it: a meeting is
-        // drawn on top, so a right-click that lands on one is unambiguously
-        // about that meeting, and the shift layer's own menu never has to
-        // know meetings exist.
-        .contextMenu {
-            Button("Delete Meeting", role: .destructive) { onRemove() }
-        }
-        .offset(y: topOffset)
-    }
-
-    private func dragHandle(mode: DragMode, height: CGFloat) -> some View {
-        Rectangle()
-            .fill(Color.clear)
-            .frame(width: barWidth + 20, height: max(height, 1))
-            .contentShape(Rectangle())
-            #if os(macOS)
-            .background(WindowDragBlocker())
-            #endif
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        dragMode = mode
-                        dragPointsDelta = value.translation.height
-                    }
-                    .onEnded { value in
-                        guard abs(value.translation.height) >= Self.tapSlop else {
-                            dragMode = nil
-                            dragPointsDelta = 0
-                            onSelect()
-                            return
-                        }
-                        let delta = Double(value.translation.height) * secondsPerPoint
-                        var finalStart = meeting.start
-                        var finalEnd = meeting.end
-                        switch mode {
-                        case .moveWhole:
-                            finalStart = meeting.start.addingTimeInterval(delta)
-                            finalEnd = meeting.end.addingTimeInterval(delta)
-                        case .resizeTop:
-                            finalStart = meeting.start.addingTimeInterval(delta)
-                        case .resizeBottom:
-                            finalEnd = meeting.end.addingTimeInterval(delta)
-                        }
-                        finalStart = min(max(finalStart, dayStart), dayEnd)
-                        finalEnd = min(max(finalEnd, dayStart), dayEnd)
-
-                        dragMode = nil
-                        dragPointsDelta = 0
-
-                        let snappedStart = snap(finalStart)
-                        let snappedEnd = snap(finalEnd)
-                        if snappedStart < snappedEnd {
-                            onChange(snappedStart, snappedEnd)
-                        }
-                    }
             )
-            #if os(macOS)
-            .onHover { hovering in
-                if hovering {
-                    (mode == .moveWhole ? NSCursor.openHand : NSCursor.resizeUpDown).push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            #endif
-    }
-
-    /// Rounds to the nearest 5 minutes.
-    private func snap(_ date: Date) -> Date {
-        let interval: TimeInterval = 5 * 60
-        let rounded = (date.timeIntervalSinceReferenceDate / interval).rounded() * interval
-        return Date(timeIntervalSinceReferenceDate: rounded)
+            .allowsHitTesting(false)
+            .offset(y: topOffset)
     }
 }
 

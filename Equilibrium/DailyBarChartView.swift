@@ -38,12 +38,9 @@ struct DailyBarChartView: View {
     /// focus is no longer the chart's business — a column says which day,
     /// and nothing about which half of it.
     let onSelectDay: (Date) -> Void
-    let onMeetingChange: (Date, UUID, Date, Date) -> Void
     let onShiftChange: (Date, UUID, Date, Date) -> Void
     let onShiftAdd: (Date, Date, Date) -> Void
     let onShiftRemove: (Date, UUID) -> Void
-    let onMeetingRemove: (Date, UUID) -> Void
-    let onResetMeetings: (Date) -> Void
     let onDelete: (Date) -> Void
 
     @State private var hoveringDay: Date?
@@ -57,7 +54,7 @@ struct DailyBarChartView: View {
     /// The day's total — or, on a day with no hours on it yet, the hours
     /// being recommended for it.
     private static let totalHeight: CGFloat = 13
-    /// The hover-revealed delete / reset row under each column.
+    /// The hover-revealed delete row under each column.
     private static let columnControlsHeight: CGFloat = 12
     /// Gap between the pieces of a day's column.
     private static let columnStackSpacing: CGFloat = 2
@@ -357,9 +354,6 @@ struct DailyBarChartView: View {
                 recommendedHours: recommendedHours(day),
                 shiftTemplates: shiftTemplates,
                 onSelect: { onSelectDay(day) },
-                onMeetingChange: { meetingID, newStart, newEnd in
-                    onMeetingChange(day, meetingID, newStart, newEnd)
-                },
                 onShiftChange: { shiftID, newStart, newEnd in
                     onShiftChange(day, shiftID, newStart, newEnd)
                 },
@@ -369,25 +363,14 @@ struct DailyBarChartView: View {
                 onShiftRemove: { shiftID in
                     onShiftRemove(day, shiftID)
                 },
-                onMeetingRemove: { meetingID in
-                    onMeetingRemove(day, meetingID)
-                },
                 onDeleteDay: { onDelete(day) }
             )
 
             columnTotal(day: day, span: span)
 
-            // Delete / Reset-meetings buttons, revealed on hover so the bar
-            // itself (only ~10pt wide) doesn't need to host them.
+            // The delete button, revealed on hover so the bar itself (only
+            // ~10pt wide) doesn't need to host it.
             HStack(spacing: 8) {
-                if span?.meetingsManuallyEdited == true {
-                    Button {
-                        onResetMeetings(day)
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward.circle")
-                    }
-                    .help("Reset meetings to calendar data")
-                }
                 if !(span?.shifts.isEmpty ?? true) {
                     Button {
                         onDelete(day)
