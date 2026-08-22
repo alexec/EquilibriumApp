@@ -12,12 +12,11 @@ import Foundation
 /// query per hover (the day's meetings come from the week the view model
 /// already caches for the people strip).
 ///
-/// A block that matches no event still gets a tooltip. Hand-dragged blocks
-/// (`WorkdaySpan.meetingsManuallyEdited`) have moved away from whatever they
-/// came from, days older than the calendar's own retention have no events to
-/// match, and a refused calendar permission leaves nothing to match against.
-/// All three fall back to the times the block itself knows, which is still
-/// more than the capsule shows at 14pt wide.
+/// A block that matches no event still gets a tooltip: days older than the
+/// calendar's own retention have no events to match, and a refused calendar
+/// permission leaves nothing to match against. Both fall back to the times
+/// the block itself knows, which is still more than the capsule shows at
+/// 14pt wide.
 enum MeetingBlockDetails {
     /// How many titles a merged block spells out before it starts counting.
     /// A morning of back-to-back calls folds into one block, and listing

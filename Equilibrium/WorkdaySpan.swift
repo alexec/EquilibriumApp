@@ -60,9 +60,11 @@ struct WorkdaySpan: Codable, Identifiable {
     var isManual: Bool = false
 
     /// This workday's meetings, each with its own real start/end time.
-    /// Populated from EventKit once calendar permission is granted: clipped
-    /// to `start...end` for days with real work, or full-day for future week
-    /// days that only hold calendar blocks so far. Empty may mean "no
+    /// Always EventKit's times, never the app's: a block can't be dragged,
+    /// resized or removed here, so every refresh is free to re-derive the
+    /// lot. Clipped
+    /// to `start...end` for days with real work, or full-day for future
+    /// week days that only hold calendar blocks so far. Empty may mean "no
     /// calendar access yet" or "genuinely zero meetings" — see
     /// `hasCalendarData` for which.
     var meetings: [MeetingBlock] = []
@@ -72,12 +74,6 @@ struct WorkdaySpan: Codable, Identifiable {
     /// or "checked, zero meetings." Set once `refreshMeetingData()`
     /// processes this day.
     var hasCalendarData: Bool = false
-
-    /// True once any meeting on this day has been hand-dragged (resized or
-    /// moved). While true, calendar refreshes leave `meetings` alone
-    /// rather than overwriting your edits — see `WorkHistoryViewModel`'s
-    /// `updateMeeting`/`resetMeetings`.
-    var meetingsManuallyEdited: Bool = false
 
     /// Break minutes that couldn't be expressed as a gap between shifts:
     /// pre-shift history's auto-detected intra-day breaks, and gaps closed
@@ -160,7 +156,6 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual: Bool = false,
         meetings: [MeetingBlock] = [],
         hasCalendarData: Bool = false,
-        meetingsManuallyEdited: Bool = false,
         intraBreakMinutes: Int = 0,
         longestStretchMinutes: Int = 0,
         hasLunchBreak: Bool = false
@@ -171,7 +166,6 @@ struct WorkdaySpan: Codable, Identifiable {
         self.isManual = isManual
         self.meetings = meetings
         self.hasCalendarData = hasCalendarData
-        self.meetingsManuallyEdited = meetingsManuallyEdited
         self.intraBreakMinutes = intraBreakMinutes
         self.longestStretchMinutes = longestStretchMinutes
         self.hasLunchBreak = hasLunchBreak
@@ -179,7 +173,7 @@ struct WorkdaySpan: Codable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case dayKey, shifts, breakMinutes, isManual, meetings, hasCalendarData
-        case meetingsManuallyEdited, intraBreakMinutes, longestStretchMinutes, hasLunchBreak
+        case intraBreakMinutes, longestStretchMinutes, hasLunchBreak
         /// Pre-shift history: one contiguous block per day, read on the way
         /// in and never written again.
         case start, end
@@ -193,7 +187,6 @@ struct WorkdaySpan: Codable, Identifiable {
         try container.encode(isManual, forKey: .isManual)
         try container.encode(meetings, forKey: .meetings)
         try container.encode(hasCalendarData, forKey: .hasCalendarData)
-        try container.encode(meetingsManuallyEdited, forKey: .meetingsManuallyEdited)
         try container.encode(intraBreakMinutes, forKey: .intraBreakMinutes)
         try container.encode(longestStretchMinutes, forKey: .longestStretchMinutes)
         try container.encode(hasLunchBreak, forKey: .hasLunchBreak)
@@ -206,7 +199,6 @@ struct WorkdaySpan: Codable, Identifiable {
         isManual = try container.decodeIfPresent(Bool.self, forKey: .isManual) ?? false
         meetings = try container.decodeIfPresent([MeetingBlock].self, forKey: .meetings) ?? []
         hasCalendarData = try container.decodeIfPresent(Bool.self, forKey: .hasCalendarData) ?? false
-        meetingsManuallyEdited = try container.decodeIfPresent(Bool.self, forKey: .meetingsManuallyEdited) ?? false
         intraBreakMinutes = try container.decodeIfPresent(Int.self, forKey: .intraBreakMinutes) ?? 0
         longestStretchMinutes = try container.decodeIfPresent(Int.self, forKey: .longestStretchMinutes) ?? 0
         hasLunchBreak = try container.decodeIfPresent(Bool.self, forKey: .hasLunchBreak) ?? false

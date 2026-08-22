@@ -71,10 +71,14 @@ week" marker go in UserDefaults.
 
 ### Rules the data layer enforces
 
-- **Manual edits win.** `WorkdaySpan.isManual` blocks automatic recompute of that
-  day entirely; `meetingsManuallyEdited` blocks calendar refresh from overwriting
-  hand-dragged meeting blocks. `WorkHistoryStore.merge` and
-  `WorkHistoryViewModel.refreshMeetingData` each re-check these independently.
+- **Manual edits win — but only over shifts.** `WorkdaySpan.isManual` blocks
+  automatic recompute of that day entirely, and `WorkHistoryStore.merge` checks it
+  on every write. Meetings have no equivalent: they are read-only annotations,
+  re-derived from EventKit on every refresh, because Calendar is the only thing
+  that knows when a meeting is. Blocks were draggable once, behind a
+  `meetingsManuallyEdited` flag that stopped refreshes overwriting them — which
+  left the bar showing times the diary had moved on from until someone pressed
+  reset. Don't reintroduce a local copy of a meeting's time.
 - **History is append-mostly.** `merge` overwrites only today and yesterday; older
   days are added if absent but never recomputed, because their source power events
   age out of the 30-day retention window.
