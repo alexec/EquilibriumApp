@@ -146,6 +146,7 @@ struct ContentView: View {
                 days: days,
                 spans: days.map { viewModel.span(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
+                meetings: { viewModel.chartMeetings(for: $0) },
                 shiftTemplates: viewModel.preferences.shifts,
                 weeklyTargetHours: viewModel.preferences.weeklyTargetHours,
                 aiWeekSummary: { weekStart in viewModel.weekHeaderSummary(forWeekStarting: weekStart) },

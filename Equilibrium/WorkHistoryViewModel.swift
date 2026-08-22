@@ -181,6 +181,11 @@ final class WorkHistoryViewModel: ObservableObject {
     /// because gathering it is seven EventKit queries and the strip is
     /// rebuilt on every day click.
     private var weekMeetings: [DayMeeting] = []
+    /// The same meetings, split by `dayKey`, for the chart's hover tooltips
+    /// — see `chartMeetings(for:)`. Published, unlike `weekMeetings`: this
+    /// one is read from a view body, and a calendar refresh that renames a
+    /// meeting or moves it has to redraw the tooltip that quotes it.
+    @Published private(set) var weekMeetingsByDay: [String: [DayMeeting]] = [:]
     /// Whether a trip to Mail is under way, so a second one doesn't start
     /// on top of it — the model pass alone takes seconds per message.
     private var isRefreshingMail = false
@@ -1278,12 +1283,32 @@ final class WorkHistoryViewModel: ObservableObject {
     func reloadWeekMeetings() {
         guard calendarAccessGranted else {
             weekMeetings = []
+            weekMeetingsByDay = [:]
             calendarSelfAddresses = []
             return
         }
         let days = visibleWeekDays
-        weekMeetings = days.flatMap { CalendarStore.shared.dayMeetings(on: $0) }
+        let byDay = days.map { (dayKeyFormatter.string(from: $0), CalendarStore.shared.dayMeetings(on: $0)) }
+        weekMeetings = byDay.flatMap(\.1)
+        // Keeping either copy on a repeated key rather than trapping on one:
+        // `WeekCalendar.weekDays` repeats its first day rather than return
+        // fewer than seven if date arithmetic ever fails, and the same day
+        // twice is the same meetings twice.
+        weekMeetingsByDay = Dictionary(byDay, uniquingKeysWith: { first, _ in first })
         calendarSelfAddresses = CalendarStore.shared.currentUserAddresses(on: days)
+    }
+
+    /// A day's meetings for the chart, from the cache above rather than from
+    /// EventKit. What the hover tooltip on a meeting capsule is written from
+    /// (see `MeetingBlockDetails`), which means it's read from
+    /// `DailyBarChartView`'s body — several times per day column, every time
+    /// SwiftUI passes over it. `meetings(for:)` runs a calendar query per
+    /// call and can't be asked that often.
+    ///
+    /// Empty for a day outside the visible week, which is every day the
+    /// chart isn't drawing.
+    func chartMeetings(for day: Date) -> [DayMeeting] {
+        weekMeetingsByDay[dayKeyFormatter.string(from: day)] ?? []
     }
 
     func refreshDerivedMailState() {
