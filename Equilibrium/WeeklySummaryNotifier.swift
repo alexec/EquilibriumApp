@@ -2,8 +2,13 @@ import Foundation
 import UserNotifications
 
 /// Fires a one-sentence digest notification on Saturday morning, once per
-/// week: "Last week: 38h, 1 late night, 1 weekend day worked, longest day
-/// Tue 10.5h. Budget this week: 35h."
+/// week: "Last week: 38h, 1 late night, 1 weekend day worked, starting 45
+/// min later than the week before, longest day Tue 10½h. Budget this week:
+/// 35h."
+///
+/// The signals come from `WeeklyInsights`, which counts them; the wording
+/// is this file's, and clauses are dropped rather than written as zeroes,
+/// so a quiet week says only how many hours it was.
 ///
 /// Saturday, not Monday, because the app's week *is* Saturday→Friday
 /// (`WeekCalendar`). A Monday digest quoted a budget for a week that was
@@ -16,9 +21,6 @@ import UserNotifications
 /// Takes `weeklyTargetHours` (from `WorkPreferences`) for the budget figure
 /// and guards against duplicate firing with a UserDefaults key.
 enum WeeklySummaryNotifier {
-
-    /// Hours after which an end time is considered a "late night".
-    static let lateNightHour: Int = 20
 
     /// Keyed by the week's Saturday rather than by an ISO week number: an
     /// ISO week rolls over on Monday, which is no longer the day this fires,
@@ -65,12 +67,14 @@ enum WeeklySummaryNotifier {
         let lastWeekSpans: [WorkdaySpan?] = lastWeekDays.map { spans[dayKey(for: $0, calendar: calendar)] }
         let workedSpans = lastWeekSpans.compactMap { $0 }
 
+        // The week before that, for the one signal that can't be read off a
+        // single week: whether the day is quietly starting later than it
+        // used to.
+        let priorWeekDays = WeekCalendar.weekDays(offset: -2, calendar: calendar, today: today)
+        let priorWeekSpans: [WorkdaySpan?] = priorWeekDays.map { spans[dayKey(for: $0, calendar: calendar)] }
+
         let totalHours = workedSpans.reduce(0.0) { $0 + $1.effectiveHours }
-        let lateNights = WeeklyInsights.lateNightCount(
-            spans: lastWeekSpans,
-            lateNightHour: lateNightHour,
-            calendar: calendar
-        )
+        let lateNights = WeeklyInsights.lateNightCount(spans: lastWeekSpans, calendar: calendar)
         let weekendDays = WeeklyInsights.weekendWorkCount(
             days: lastWeekDays,
             spans: lastWeekSpans,
@@ -92,6 +96,14 @@ enum WeeklySummaryNotifier {
         // be off.
         if weekendDays > 0 {
             parts.append("\(weekendDays) weekend day\(weekendDays == 1 ? "" : "s") worked")
+        }
+
+        if let drift = WeeklyInsights.startDriftMinutes(
+            spans: lastWeekSpans,
+            previous: priorWeekSpans,
+            calendar: calendar
+        ) {
+            parts.append("starting \(drift) min later than the week before")
         }
 
         if let longest = longestSpan {
