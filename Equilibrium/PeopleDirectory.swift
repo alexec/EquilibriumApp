@@ -41,6 +41,10 @@ struct PersonActivity: Identifiable, Equatable {
 /// were merely on the same message or in the same room. The first group is
 /// who your day is answerable to; the second is context.
 ///
+/// The split decides how a chip is *drawn*, not where it sits: the list is
+/// ordered by how much of your week someone accounts for, and primary only
+/// breaks a tie between two people with the same total. See the sort.
+///
 /// Two consequences worth stating, because they're the whole rule:
 ///
 /// - **Sending once is enough.** Someone who wrote to you on Monday and was
@@ -189,18 +193,39 @@ enum PeopleDirectory {
                     latest: $0.latest
                 )
             }
-            // Primary first, then whoever accounts for the most of your
-            // week, then most recent as the tie-break.
+            // Whoever accounts for the most of your week first, then
+            // primary over secondary, then most recent, then the address.
             //
             // Ordering by recency alone put whoever happened to write last
             // at the front, which is a fact about the clock rather than
             // about the week: the person who has sent four messages and
             // called two meetings is the one the day is really about, and
             // they belong at the top even if they wrote on Monday.
+            //
+            // Weight leads and `isPrimary` is only a tie-break, which is a
+            // reversal of the first version. Sorting on the flag first
+            // sounded right — the people who asked something of you before
+            // the people who were merely there — but on a diary-heavy week
+            // it makes the strip look like it isn't sorted at all: every
+            // meeting has an organiser, so a long run of primaries counts
+            // down 4, 3, 2, 1, 1, 1 and then the secondaries start again at
+            // 9. Two orderings end to end read as none, and the counts are
+            // printed on every chip, so the jump back up is right there to
+            // be seen. The distinction hasn't gone anywhere — it is what
+            // draws a chip solid rather than light — it just no longer
+            // splits the list into two blocks.
+            //
+            // The address is the last resort and exists only to be
+            // deterministic. Everyone in one meeting shares a `latest` (the
+            // meeting's start) and usually a weight of 1, so without it
+            // they came out in `tallies`' hash order, which Swift seeds per
+            // process: the same week ordered differently on two Macs, and
+            // differently again after a relaunch.
             .sorted { left, right in
-                if left.isPrimary != right.isPrimary { return left.isPrimary }
                 if left.weight != right.weight { return left.weight > right.weight }
-                return left.latest > right.latest
+                if left.isPrimary != right.isPrimary { return left.isPrimary }
+                if left.latest != right.latest { return left.latest > right.latest }
+                return left.person.address < right.person.address
             }
     }
 }
