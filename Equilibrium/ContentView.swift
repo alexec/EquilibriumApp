@@ -135,7 +135,12 @@ struct ContentView: View {
         // and an empty row above one card and not the others is exactly the
         // misalignment it was meant to prevent. The spinner now sits on the
         // card it describes.
-        Group {
+        //
+        // A stack rather than the `Group` this was: a Group's children are
+        // laid out by whatever contains it, so once the weekly question
+        // joined the chart in here, the two became columns of the HStack
+        // outside rather than one column with a card under it.
+        VStack(alignment: .leading, spacing: 16) {
             // Read once and used for everything the chart shows — bars,
             // hours and the week's name. The week is derived from "now" on
             // each read, so separate reads either side of midnight would
@@ -178,6 +183,26 @@ struct ContentView: View {
                         .controlSize(.small)
                         .padding(12)
                 }
+            }
+
+            // Under the chart, and only once the week it's about has
+            // finished. Rebuilt per week so paging back to an answered week
+            // shows that week's words rather than keeping the last one's in
+            // @State — and so the outgoing week's pending write is flushed
+            // by the card's `onDisappear`, the same trick the day panel uses.
+            if let weekStart = days.first, viewModel.weekIsReviewable(weekStarting: weekStart) {
+                WeeklyReviewCard(
+                    existing: viewModel.weeklyReview(forWeekStarting: weekStart),
+                    hours: viewModel.weeklyHours(forWeekStarting: weekStart),
+                    onSave: { answer, verdict in
+                        viewModel.saveWeeklyReview(
+                            weekStarting: weekStart,
+                            answer: answer,
+                            verdict: verdict
+                        )
+                    }
+                )
+                .id(weekStart)
             }
         }
     }
