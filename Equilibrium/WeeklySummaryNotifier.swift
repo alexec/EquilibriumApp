@@ -1,8 +1,17 @@
 import Foundation
 import UserNotifications
 
-/// Fires a one-sentence Monday-morning digest notification once per ISO week:
-/// "Last week: 38h, 1 late night, longest day Tue 10.5h. Budget this week: 35h."
+/// Fires a one-sentence digest notification on Saturday morning, once per
+/// week: "Last week: 38h, 1 late night, 1 weekend day worked, longest day
+/// Tue 10.5h. Budget this week: 35h."
+///
+/// Saturday, not Monday, because the app's week *is* Saturday→Friday
+/// (`WeekCalendar`). A Monday digest quoted a budget for a week that was
+/// already two days old, and measured a Mon–Fri week that no other part of
+/// the app draws — so the total in the notification and the total on the
+/// chart disagreed for the same week, with nothing on screen to explain the
+/// difference. Firing on the first day of the week the budget belongs to
+/// makes both figures the week the chart pages to.
 ///
 /// Takes `weeklyTargetHours` (from `WorkPreferences`) for the budget figure
 /// and guards against duplicate firing with a UserDefaults key.
@@ -11,12 +20,18 @@ enum WeeklySummaryNotifier {
     /// Hours after which an end time is considered a "late night".
     static let lateNightHour: Int = 20
 
-    private static let lastFiredWeekKey = "WeeklySummaryNotifier.lastFiredISOWeek"
+    /// Keyed by the week's Saturday rather than by an ISO week number: an
+    /// ISO week rolls over on Monday, which is no longer the day this fires,
+    /// and the app has its own idea of which seven days are a week. The key
+    /// name changed with it, so a marker left by the old Monday digest can't
+    /// suppress the first Saturday one.
+    private static let lastFiredWeekKey = "WeeklySummaryNotifier.lastFiredWeekStart"
 
     // MARK: - Public API
 
     /// Call this on launch (and after each data refresh). Fires the digest
-    /// notification if today is Monday and we haven't yet fired one this week.
+    /// notification if today is Saturday and we haven't yet fired one for
+    /// the week starting today.
     static func fireIfNeeded(
         store: WorkHistoryStore,
         weeklyTargetHours: Double,
@@ -24,13 +39,13 @@ enum WeeklySummaryNotifier {
         today: Date = Date(),
         defaults: UserDefaults = .standard
     ) {
-        guard isMonday(today, calendar: calendar) else { return }
+        guard isSaturday(today, calendar: calendar) else { return }
 
-        let currentISOWeek = isoWeekIdentifier(for: today, calendar: calendar)
-        guard defaults.string(forKey: lastFiredWeekKey) != currentISOWeek else { return }
+        let currentWeek = weekStartKey(for: today, calendar: calendar)
+        guard defaults.string(forKey: lastFiredWeekKey) != currentWeek else { return }
 
         let message = buildMessage(store: store, weeklyTargetHours: weeklyTargetHours, calendar: calendar, today: today)
-        scheduleNotification(body: message, weekKey: currentISOWeek, defaults: defaults)
+        scheduleNotification(body: message, weekKey: currentWeek, defaults: defaults)
     }
 
     // MARK: - Internal helpers (internal for testability)
@@ -43,12 +58,25 @@ enum WeeklySummaryNotifier {
     ) -> String {
         let spans = store.load()
 
-        let lastWeekDays = lastWeekWeekdays(today: today, calendar: calendar)
-        let lastWeekSpans = lastWeekDays.compactMap { spans[dayKey(for: $0, calendar: calendar)] }
+        let lastWeekDays = WeekCalendar.weekDays(offset: -1, calendar: calendar, today: today)
+        // Kept parallel to `lastWeekDays`, holes and all: `WeeklyInsights`
+        // pairs a day with its span by position, so compacting the array
+        // first would line a Saturday up with some weekday's hours.
+        let lastWeekSpans: [WorkdaySpan?] = lastWeekDays.map { spans[dayKey(for: $0, calendar: calendar)] }
+        let workedSpans = lastWeekSpans.compactMap { $0 }
 
-        let totalHours = lastWeekSpans.reduce(0.0) { $0 + $1.effectiveHours }
-        let lateNights = lastWeekSpans.filter { isLateNight($0, calendar: calendar) }.count
-        let longestSpan = lastWeekSpans.max(by: { $0.effectiveHours < $1.effectiveHours })
+        let totalHours = workedSpans.reduce(0.0) { $0 + $1.effectiveHours }
+        let lateNights = WeeklyInsights.lateNightCount(
+            spans: lastWeekSpans,
+            lateNightHour: lateNightHour,
+            calendar: calendar
+        )
+        let weekendDays = WeeklyInsights.weekendWorkCount(
+            days: lastWeekDays,
+            spans: lastWeekSpans,
+            calendar: calendar
+        )
+        let longestSpan = workedSpans.max(by: { $0.effectiveHours < $1.effectiveHours })
 
         let totalStr = formatHours(totalHours)
         let budgetStr = formatHours(weeklyTargetHours)
@@ -57,6 +85,13 @@ enum WeeklySummaryNotifier {
 
         if lateNights > 0 {
             parts.append("\(lateNights) late night\(lateNights == 1 ? "" : "s")")
+        }
+
+        // The signal the Mon–Fri digest could never carry, and the one this
+        // notification exists to catch: hours on days that were supposed to
+        // be off.
+        if weekendDays > 0 {
+            parts.append("\(weekendDays) weekend day\(weekendDays == 1 ? "" : "s") worked")
         }
 
         if let longest = longestSpan {
@@ -71,25 +106,15 @@ enum WeeklySummaryNotifier {
 
     // MARK: - Private helpers
 
-    private static func isMonday(_ date: Date, calendar: Calendar) -> Bool {
-        calendar.component(.weekday, from: date) == 2 // 2 = Monday
+    private static func isSaturday(_ date: Date, calendar: Calendar) -> Bool {
+        calendar.component(.weekday, from: date) == 7 // 7 = Saturday
     }
 
-    private static func isoWeekIdentifier(for date: Date, calendar: Calendar) -> String {
-        var iso = Calendar(identifier: .iso8601)
-        iso.locale = Locale(identifier: "en_US_POSIX")
-        let week = iso.component(.weekOfYear, from: date)
-        let year = iso.component(.yearForWeekOfYear, from: date)
-        return String(format: "%04d-W%02d", year, week)
-    }
-
-    /// The five weekdays (Mon–Fri) of the previous calendar week.
-    private static func lastWeekWeekdays(today: Date, calendar: Calendar) -> [Date] {
-        let monday = calendar.startOfDay(for: today)
-        // Offsets from this Monday to last week's Mon–Fri: -7, -6, -5, -4, -3
-        return (3...7).reversed().compactMap { offset in
-            calendar.date(byAdding: .day, value: -offset, to: monday)
-        }
+    /// The `dayKey` of the Saturday starting the week containing `date` —
+    /// the identity of a week, in the terms the rest of the app uses.
+    private static func weekStartKey(for date: Date, calendar: Calendar) -> String {
+        let start = WeekCalendar.weekStart(offset: 0, calendar: calendar, today: date)
+        return dayKey(for: start, calendar: calendar)
     }
 
     private static func dayKey(for date: Date, calendar: Calendar) -> String {
@@ -98,11 +123,6 @@ enum WeeklySummaryNotifier {
         fmt.calendar = calendar
         fmt.timeZone = calendar.timeZone
         return fmt.string(from: date)
-    }
-
-    private static func isLateNight(_ span: WorkdaySpan, calendar: Calendar) -> Bool {
-        let endHour = calendar.component(.hour, from: span.end)
-        return endHour >= lateNightHour
     }
 
     private static func formatHours(_ hours: Double) -> String {

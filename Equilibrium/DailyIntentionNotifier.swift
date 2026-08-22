@@ -6,7 +6,7 @@ import UserNotifications
 ///
 /// Uses `UNCalendarNotificationTrigger` so reminders fire even when the app
 /// isn't actively refreshing — unlike `WeeklySummaryNotifier`, which fires
-/// once immediately when a Monday refresh happens to run.
+/// once immediately when a Saturday refresh happens to run.
 enum DailyIntentionNotifier {
 
     static let intentionCategory = "daily-intention"
