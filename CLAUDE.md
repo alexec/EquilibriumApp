@@ -27,7 +27,7 @@ CI (`.github/workflows/pr-build.yml`, macOS 15 runner) does the same with
 There is **no test target and no tests** — verification is building and running the
 app. Several helpers are deliberately pure and `internal` "for testability"
 (`WorkdayCalculator`, `WorkloadRecommender`, `WeeklySummaryNotifier.buildMessage`,
-`MeetingCalculator`, `WeekCalendar`, `ShiftPlan`) — the app calls them, but there is
+`MeetingCalculator`, `WeekCalendar`, `ShiftPlan`, `WeekRanking`) — the app calls them, but there is
 no test target to exercise them, so checking one means driving the app or building a
 throwaway harness against the source files.
 

@@ -32,6 +32,17 @@ struct ContentView: View {
                 await viewModel.refreshMail()
             }
         }
+        .sheet(isPresented: $viewModel.showsWeekRanking) {
+            // Read once as the sheet opens rather than on every body pass:
+            // the list is a snapshot of finished weeks, and nothing behind
+            // the sheet can change them while it's up.
+            let summaries = viewModel.rankedWeeks()
+            WeekRankingView(
+                summaries: summaries,
+                comparison: WeekRanking.comparison(summaries),
+                onClose: { viewModel.showsWeekRanking = false }
+            )
+        }
         // A sheet rather than the popover this used to be: the gear it hung
         // from is gone, and settings opened from a menu has nothing in the
         // window to point at.
@@ -175,7 +186,8 @@ struct ContentView: View {
                 onShiftRemove: { day, shiftID in
                     viewModel.removeShift(for: day, shiftID: shiftID)
                 },
-                onDelete: { day in viewModel.deleteHours(for: day) }
+                onDelete: { day in viewModel.deleteHours(for: day) },
+                onShowAllWeeks: { viewModel.showsWeekRanking = true }
             )
             .overlay(alignment: .topTrailing) {
                 if viewModel.isLoading {
