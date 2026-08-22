@@ -81,6 +81,19 @@ struct EquilibriumApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
 
+            // Beside the week it summarises, in the menu rather than in
+            // the window: the window has three columns already, and this is
+            // something you go and look at rather than keep an eye on. The
+            // chart header carries a button to the same place, for anyone
+            // who never opens a menu.
+            CommandGroup(after: .toolbar) {
+                Button("Weeks by Hours…") {
+                    viewModel.showsWeekRanking = true
+                    MainWindow.present { }
+                }
+                .keyboardShortcut("l", modifiers: .command)
+            }
+
             // Replaces the default "About Equilibrium" item with one that
             // opens the standard panel but with our "why I built this"
             // story as its credits text, instead of a custom in-window

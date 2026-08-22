@@ -109,6 +109,9 @@ final class WorkHistoryViewModel: ObservableObject {
     /// that opens it is now a menu command, and a `Commands` builder can't
     /// reach into a view's private state.
     @Published var showsPreferences = false
+    /// Whether the ranked list of past weeks is open — see
+    /// `WeekRankingView`.
+    @Published var showsWeekRanking = false
     /// The day shown in the panel beside the chart. Always set — the panel
     /// is permanent furniture rather than something you open — so this
     /// starts on today and only ever moves to another day.
@@ -707,6 +710,20 @@ final class WorkHistoryViewModel: ObservableObject {
     /// the panel both work on whichever day you click, not just today.
     func intention(for day: Date) -> DailyIntention? {
         intentionsByDay[dayKey(for: day)]
+    }
+
+    /// Every finished week, heaviest first, with what was written in it.
+    ///
+    /// Computed on demand rather than cached: it's read when the sheet
+    /// opens and nowhere else, and the arithmetic is a pass over a few
+    /// hundred stored days.
+    func rankedWeeks() -> [WeekRanking.WeekSummary] {
+        WeekRanking.summaries(
+            spans: spansByDay,
+            intentions: intentionsByDay,
+            reviews: weeklyReviewsByWeek,
+            calendar: calendar
+        )
     }
 
     /// The answer to "was that worth it?" for the week `weekStart` begins,

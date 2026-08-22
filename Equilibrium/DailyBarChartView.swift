@@ -48,6 +48,8 @@ struct DailyBarChartView: View {
     let onShiftAdd: (Date, Date, Date) -> Void
     let onShiftRemove: (Date, UUID) -> Void
     let onDelete: (Date) -> Void
+    /// Opens the ranked list of past weeks (`WeekRankingView`).
+    let onShowAllWeeks: () -> Void
 
     @State private var hoveringDay: Date?
     /// Which side the week being moved to slides in from; see `page(_:)`.
@@ -202,6 +204,19 @@ struct DailyBarChartView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        // Overlaid rather than placed in the row, so the week's name stays
+        // centred over the columns it names: a trailing button in the same
+        // HStack would push it off centre by its own width.
+        .overlay(alignment: .topTrailing) {
+            Button(action: onShowAllWeeks) {
+                Image(systemName: "list.number")
+                    .font(.system(size: 11))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("All weeks, heaviest first")
+            .accessibilityLabel("All weeks, heaviest first")
+        }
     }
 
     /// `label` names the button for VoiceOver as well as the tooltip: the
