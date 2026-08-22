@@ -7,11 +7,14 @@ import SwiftUI
 /// The strip puts them back: who wrote, who called the meeting, and who
 /// else was in the room.
 ///
-/// Two weights, not two lists. The people who asked something of you come
-/// first and are drawn solid; everyone who was merely also there follows in
-/// the same flow, lighter and smaller. Splitting them into separate
-/// labelled lists was the alternative, and it made a filing system out of
-/// what should be a glance.
+/// Two weights, not two lists. The people who asked something of you are
+/// drawn solid; everyone who was merely also there sits in the same flow,
+/// lighter and smaller. Splitting them into separate labelled lists was the
+/// alternative, and it made a filing system out of what should be a glance.
+///
+/// Solid and light are interleaved rather than blocked, because the order
+/// is the totals on the chips — most of your week first, whoever they are.
+/// See `PeopleDirectory`.
 ///
 /// The chips wrap and the strip scrolls downward, rather than running off
 /// the right-hand edge: a horizontal row put everyone past the fourth

@@ -221,11 +221,31 @@ final class WorkHistoryViewModel: ObservableObject {
     }
 
     /// Starts IOKit power-notification monitoring and the periodic refresh
-    /// timer.  Safe to call more than once.
+    /// timers. Safe to call more than once.
+    ///
+    /// Called once, from the App's own `init`, and never stopped — the
+    /// timers live as long as the process rather than as long as a window.
+    /// This used to be driven from `ContentView`'s `onAppear`/`onDisappear`
+    /// pair, which was wrong twice over. The obvious way: closing the
+    /// window on a menu bar app is the normal thing to do, and it silently
+    /// took the menu bar's line, the five-minute data refresh and the power
+    /// monitor with it, so the tray sat on whatever figure it happened to
+    /// be showing and the sleep/wake events behind the whole app stopped
+    /// being recorded — measured at zero ticks in the half-minute after the
+    /// close, against one every interval before it. The less obvious way:
+    /// SwiftUI brings up two windows of the group at launch and
+    /// `WindowChromeRemover` closes the spare, so an `onDisappear` fires
+    /// seconds after `onAppear` with nobody having closed anything, and
+    /// whether the timers survived it came down to which order the two
+    /// windows happened to run their callbacks in.
+    ///
+    /// There is deliberately no `stopAutoRefresh` counterpart. Nothing in a
+    /// menu bar app should be able to switch the menu bar off, and an
+    /// unused one is an invitation to wire it back to a window.
     func startAutoRefresh() {
         powerMonitor.start()
         guard autoRefreshTimer == nil else { return }
-        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: Self.autoRefreshInterval, repeats: true) { [weak self] _ in
+        let dataTimer = Timer(timeInterval: Self.autoRefreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.refresh()
                 await self?.refreshMail()
@@ -234,7 +254,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // A minute, not five: the menu bar's line moves on its own as the
         // day passes — the figure counts down, and a meeting drops off the
         // moment it ends — without any of the data behind it changing.
-        menuBarTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        let statusTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 // Re-reads the diary, not just the clock: a meeting moved or
                 // added shows up within the minute, and the day's own
@@ -243,14 +263,16 @@ final class WorkHistoryViewModel: ObservableObject {
                 self?.refreshTodaysMeetings()
             }
         }
-    }
-
-    func stopAutoRefresh() {
-        powerMonitor.stop()
-        autoRefreshTimer?.invalidate()
-        autoRefreshTimer = nil
-        menuBarTimer?.invalidate()
-        menuBarTimer = nil
+        // `.common` rather than the `.default` mode `scheduledTimer` would
+        // have used. The moment the menu bar's line is actually being read
+        // is the moment its menu is open, and that puts the run loop into
+        // event tracking — where a default-mode timer doesn't fire at all.
+        // The five-minute one joins it for the same reason in miniature:
+        // dragging the window's edge shouldn't pause the app's data.
+        RunLoop.main.add(dataTimer, forMode: .common)
+        RunLoop.main.add(statusTimer, forMode: .common)
+        autoRefreshTimer = dataTimer
+        menuBarTimer = statusTimer
     }
 
     func refresh() {

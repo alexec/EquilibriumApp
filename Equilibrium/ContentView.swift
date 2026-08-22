@@ -31,10 +31,6 @@ struct ContentView: View {
             Task {
                 await viewModel.refreshMail()
             }
-            viewModel.startAutoRefresh()
-        }
-        .onDisappear {
-            viewModel.stopAutoRefresh()
         }
         // A sheet rather than the popover this used to be: the gear it hung
         // from is gone, and settings opened from a menu has nothing in the
