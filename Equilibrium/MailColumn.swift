@@ -13,8 +13,8 @@ struct MailColumn: View {
     let access: MailAccessState
     /// The model's line about the day, when there is one.
     let brief: String?
-    /// The counts, always shown, and the whole of this on a Mac with no
-    /// on-device model.
+    /// What you said you'd get done, then the counts. Always shown, and the
+    /// whole of this on a Mac with no on-device model.
     let briefFallback: String
     let onRefresh: () -> Void
     let onOpen: (MailMessage) -> Void
@@ -41,6 +41,12 @@ struct MailColumn: View {
     /// unrelated things; on matching cards they read as one window.
     private var card: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Above the header, not under it, and shown whether or not the
+            // inbox has anything in it: this line leads with what you said
+            // you'd get done today, which is the first thing in the window
+            // worth reading and isn't about the inbox at all. Under the
+            // "Inbox" title it read as a fact about the mail.
+            briefBlock
             header
 
             if messages.isEmpty {
@@ -60,7 +66,6 @@ struct MailColumn: View {
                 }
                 Spacer()
             } else {
-                briefBlock
                 deferredToggle
                 if let archiveProblem {
                     Text(archiveProblem)
@@ -124,19 +129,30 @@ struct MailColumn: View {
         .foregroundStyle(.secondary)
     }
 
-    /// What today is likely to ask of you, over the counts it's drawn from.
-    /// The counts stay put whether or not there's a generated line above
-    /// them — they're the part that's always true.
+    /// What today is likely to ask of you, over your own words and the
+    /// counts they sit with. The lower line stays put whether or not
+    /// there's a generated one above it — it's the part that's always true,
+    /// and on a Mac with no on-device model it's all there is.
+    ///
+    /// The two never say the same thing twice: the model is told to refer
+    /// to the intention rather than repeat it, and a brief that hands it
+    /// back is thrown away (`DayBriefGenerator.echoesGoal`).
+    @ViewBuilder
     private var briefBlock: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            if let brief {
-                Text(brief)
-                    .font(.system(size: 12))
-                    .fixedSize(horizontal: false, vertical: true)
+        if brief != nil || !briefFallback.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                if let brief {
+                    Text(brief)
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !briefFallback.isEmpty {
+                    Text(briefFallback)
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Text(briefFallback)
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
         }
     }
 

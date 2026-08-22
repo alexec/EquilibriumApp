@@ -821,6 +821,13 @@ final class WorkHistoryViewModel: ObservableObject {
         // churn for no change.
         guard entry != existing else { return }
         intentionsByDay = intentionStore.upsert(entry)
+
+        // The brief reads today's intention and yesterday's check-in, so
+        // writing one has to reach it. Nothing else calls this on a save —
+        // before the brief read them, the day panel's text changed nothing
+        // outside itself.
+        refreshDerivedMailState()
+        Task { await refreshDayBrief() }
     }
 
     /// Points the panel at `day`, focused on one of its two sections.
@@ -966,10 +973,15 @@ final class WorkHistoryViewModel: ObservableObject {
         dayBrief = generated
     }
 
-    /// What the brief is written from: today's meetings, and the action
-    /// lines the first pass produced for the messages.
+    /// What the brief is written from: today's meetings, the action lines
+    /// the first pass produced for the messages, and what you said you'd do.
+    ///
+    /// The intention is read for *today* and the check-in for *yesterday*.
+    /// This line is read in the morning, when today's check-in hasn't been
+    /// written yet and last night's is the one still hanging over the day.
     func dayBriefInput() -> DayBriefGenerator.Input {
         let meetings = meetings(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: Date()) ?? Date()
         let soon = calendar.date(byAdding: .day, value: 2, to: calendar.startOfDay(for: Date())) ?? Date()
         // Drawn from what's on screen. A brief that counted work you had
         // explicitly put off until Thursday would be describing a day you
@@ -982,7 +994,9 @@ final class WorkHistoryViewModel: ObservableObject {
             unreadCount: visible.filter(\.isUnread).count,
             dueSoonCount: summaries.filter { ($0.dueDate ?? .distantFuture) < soon }.count,
             meetingTitles: meetings.map(\.title),
-            meetingMinutes: meetings.reduce(0) { $0 + $1.durationMinutes }
+            meetingMinutes: meetings.reduce(0) { $0 + $1.durationMinutes },
+            todaysGoals: intention(for: Date())?.goals ?? "",
+            yesterdayReflection: intention(for: yesterday)?.checkInReflection ?? ""
         )
     }
 
