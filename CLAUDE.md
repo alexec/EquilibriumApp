@@ -62,11 +62,14 @@ Everything is keyed by **`dayKey` — `"yyyy-MM-dd"` in local time**: work spans
 intentions and LLM summaries all use it, and `WorkdaySpan.id`/`DailyIntention.id`
 are that key.
 
-State lives in four JSON files plus UserDefaults, all inside the sandbox container
+State lives in five JSON files plus UserDefaults, all inside the sandbox container
 `~/Library/Containers/com.alexcollins.Equilibrium/Data/Library/Application Support/WorkActivityTracker/`:
 `live-events.json` (raw power events), `history.json` (computed spans),
-`daily-intentions.json`, and `mail-summaries.json` (one action line and due
-date per message id — **never a body or a subject**, 30-day prune). `WorkPreferences` and the notifier's "already fired this
+`daily-intentions.json`, `mail-summaries.json` (one action line and due
+date per message id — **never a body or a subject**, 30-day prune), and
+`weekly-reviews.json` (one answer to "was that worth it?" per week, keyed by
+the week's Saturday — never pruned, since hours can be recomputed and what
+you thought of them can't). `WorkPreferences` and the notifier's "already fired this
 week" marker go in UserDefaults.
 
 ### Rules the data layer enforces
@@ -97,7 +100,9 @@ week" marker go in UserDefaults.
   special-cases the moment they touch.
 - **A week is Saturday→Friday**, always exactly seven days (`WeekCalendar`), so
   weekend days sit at the start of the week they belong to. Weekly target, chart
-  page, recommendation and digest all work in that unit.
+  page, recommendation, digest and the weekly review key all work in that unit —
+  a `WeeklyReview` is keyed by its week's Saturday `dayKey`, not an ISO week
+  number, which would name seven different days than the chart draws.
 - `WorkdaySpan` and `WorkPreferences` decode every field added since v1 with
   `decodeIfPresent`; keep new fields optional-with-default so existing
   `history.json` files and stored preferences still load. Both have a hand-written

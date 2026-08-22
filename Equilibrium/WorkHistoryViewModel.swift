@@ -47,6 +47,9 @@ final class WorkHistoryViewModel: ObservableObject {
     @Published var preferences: WorkPreferences = WorkPreferencesStore.load()
     /// Per-day morning intentions + evening check-ins.
     @Published var intentionsByDay: [String: DailyIntention] = [:]
+    /// One answer per week, keyed by the week's Saturday — see
+    /// `WeeklyReview`.
+    @Published private(set) var weeklyReviewsByWeek: [String: WeeklyReview] = [:]
     /// Today's meetings with their titles, kept here so the menu bar can
     /// name the next one without a calendar query on every redraw.
     @Published private(set) var todaysMeetings: [DayMeeting] = []
@@ -134,6 +137,7 @@ final class WorkHistoryViewModel: ObservableObject {
     private let intentionStore = DailyIntentionStore()
     private let liveEventStore = LiveEventStore()
     private let mailSummaryStore = MailSummaryStore()
+    private let weeklyReviewStore = WeeklyReviewStore()
     private let calendar: Calendar = .current
     private var autoRefreshTimer: Timer?
     private var menuBarTimer: Timer?
@@ -156,6 +160,7 @@ final class WorkHistoryViewModel: ObservableObject {
         // history rather than one waiting on a permission.
         spansByDay = store.load()
         intentionsByDay = intentionStore.load()
+        weeklyReviewsByWeek = weeklyReviewStore.load()
         calendarSelection = CalendarStore.shared.selection
         mailSummaries = mailSummaryStore.load()
         mailSelection = MailStore.shared.selection
@@ -702,6 +707,57 @@ final class WorkHistoryViewModel: ObservableObject {
     /// the panel both work on whichever day you click, not just today.
     func intention(for day: Date) -> DailyIntention? {
         intentionsByDay[dayKey(for: day)]
+    }
+
+    /// The answer to "was that worth it?" for the week `weekStart` begins,
+    /// if it's been given.
+    func weeklyReview(forWeekStarting weekStart: Date) -> WeeklyReview? {
+        weeklyReviewsByWeek[dayKey(for: weekStart)]
+    }
+
+    /// Whether that week is finished enough to be judged: its Friday has
+    /// arrived. A week still being lived can't be answered for, and asking
+    /// on the Tuesday would turn the answer into a formality.
+    func weekIsReviewable(weekStarting weekStart: Date, now: Date = Date()) -> Bool {
+        guard let friday = calendar.date(byAdding: .day, value: 6, to: calendar.startOfDay(for: weekStart)) else {
+            return false
+        }
+        return calendar.startOfDay(for: now) >= friday
+    }
+
+    /// The week's worked hours, for the question to be asked about a figure
+    /// rather than in the abstract. Nil when nothing was tracked.
+    func weeklyHours(forWeekStarting weekStart: Date) -> Double? {
+        let total = WeekCalendar.weekDays(offset: 0, calendar: calendar, today: weekStart)
+            .compactMap { spansByDay[dayKey(for: $0)] }
+            .reduce(0.0) { $0 + $1.effectiveHours }
+        return total > 0 ? total : nil
+    }
+
+    /// Writes a week's answer, or drops it when it's been cleared back to
+    /// nothing — an empty record would count as an answered week, and #68
+    /// is going to want to tell those apart.
+    func saveWeeklyReview(weekStarting weekStart: Date, answer: String, verdict: WeeklyReview.Verdict?) {
+        let key = dayKey(for: weekStart)
+        let existing = weeklyReviewsByWeek[key]
+        var review = existing ?? WeeklyReview(weekKey: key)
+        review.answer = answer
+        review.verdict = verdict
+
+        guard review.hasAnswer else {
+            guard existing != nil else { return }
+            weeklyReviewsByWeek = weeklyReviewStore.remove(weekKey: key)
+            return
+        }
+        // First answered, not last edited: rewording an old week shouldn't
+        // restamp it as this week's thought. Same rule as `DailyIntention`.
+        review.answeredAt = existing?.answeredAt ?? Date()
+
+        // Auto-save fires on a debounce and again when the card goes away,
+        // so most calls carry nothing new; rewriting the file anyway would
+        // be churn for no change.
+        guard review != existing else { return }
+        weeklyReviewsByWeek = weeklyReviewStore.upsert(review)
     }
 
     /// Whether a meeting is happening now or still to come, since the menu
