@@ -41,6 +41,10 @@ struct PeopleStrip: View {
     static let maximumPeople = 20
 
     let people: [PersonActivity]
+    /// Who the week is being read through, if anyone.
+    let focused: Person?
+    /// Presses a chip. Pressing the focused one again clears the focus.
+    let onSelect: (Person) -> Void
 
     /// Whoever the cap left out. Counted rather than silently dropped: a
     /// list that stops without saying so reads as the complete answer, and
@@ -56,6 +60,23 @@ struct PeopleStrip: View {
                 Text("People")
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
+                // The way out, next to the title rather than on the chip:
+                // a filtered window has to say so somewhere that doesn't
+                // move when the chips reflow, and the chip itself is busy
+                // being the thing you pressed.
+                if let focused {
+                    Button {
+                        onSelect(focused)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Showing \(focused.displayName) only")
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show the whole week again")
+                }
             }
             .foregroundStyle(.secondary)
 
@@ -67,7 +88,11 @@ struct PeopleStrip: View {
                 ScrollView(.vertical, showsIndicators: true) {
                     FlowLayout(spacing: 8, lineSpacing: 6) {
                         ForEach(people.prefix(Self.maximumPeople)) { activity in
-                            PersonChip(activity: activity)
+                            PersonChip(
+                                activity: activity,
+                                isFocused: focused?.address == activity.person.address,
+                                onSelect: { onSelect(activity.person) }
+                            )
                         }
                         if hiddenCount > 0 {
                             MorePeopleChip(count: hiddenCount)
@@ -110,8 +135,21 @@ private struct MorePeopleChip: View {
 
 private struct PersonChip: View {
     let activity: PersonActivity
+    /// Whether the window is currently being read through this person.
+    let isFocused: Bool
+    let onSelect: () -> Void
 
     var body: some View {
+        Button(action: onSelect) { chip }
+            .buttonStyle(.plain)
+            .help(tooltip)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(tooltip)
+            .accessibilityHint(isFocused ? "Show the whole week again" : "Show only this person's week")
+            .accessibilityAddTraits(isFocused ? [.isSelected] : [])
+    }
+
+    private var chip: some View {
         HStack(spacing: 6) {
             initialsCircle
             VStack(alignment: .leading, spacing: 1) {
@@ -143,12 +181,17 @@ private struct PersonChip: View {
                 .fill(Color.secondary.opacity(activity.isPrimary ? 0.12 : 0.05))
         )
         .overlay(
+            // The focused chip is outlined in the accent colour rather than
+            // filled with it: a chip is already drawn two ways to say
+            // primary or secondary, and a third fill would be a third
+            // meaning in the same place.
             Capsule()
-                .strokeBorder(Color.secondary.opacity(activity.isPrimary ? 0 : 0.15), lineWidth: 1)
+                .strokeBorder(
+                    isFocused ? Color.accentColor : Color.secondary.opacity(activity.isPrimary ? 0 : 0.15),
+                    lineWidth: isFocused ? 1.5 : 1
+                )
         )
-        .help(tooltip)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(tooltip)
+        .contentShape(Capsule())
     }
 
     private var initialsCircle: some View {

@@ -16,6 +16,11 @@ struct MailColumn: View {
     /// What you said you'd get done, then the counts. Always shown, and the
     /// whole of this on a Mac with no on-device model.
     let briefFallback: String
+    /// Who the window is being read through, when a chip in the people
+    /// strip has been pressed. The column only needs it to explain an empty
+    /// list: "nothing in the inbox" and "nothing from this person" are very
+    /// different pieces of news.
+    let focusedName: String?
     let onRefresh: () -> Void
     let onOpen: (MailMessage) -> Void
     let recommendedBlock: (MailMessage, Int) -> TimeBlockPlanner.Slot?
@@ -182,6 +187,9 @@ struct MailColumn: View {
     /// Why the column is empty. "Nothing this week" is a fact about the
     /// inbox; the other two are facts about the app.
     private var emptyMessage: String {
+        if let focusedName, access == .granted {
+            return "Nothing from \(focusedName) in the inbox."
+        }
         switch access {
         case .granted: return "Nothing in the inbox this week."
         case .pending: return "Reading your inbox…"

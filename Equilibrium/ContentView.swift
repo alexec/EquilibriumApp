@@ -19,7 +19,15 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             columns
             Divider()
-            PeopleStrip(people: viewModel.currentPeople)
+            PeopleStrip(
+                people: viewModel.currentPeople,
+                focused: viewModel.focusedPerson,
+                onSelect: { person in
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        viewModel.toggleFocus(on: person)
+                    }
+                }
+            )
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,11 +89,12 @@ struct ContentView: View {
     private var columns: some View {
         HStack(alignment: .top, spacing: 16) {
             MailColumn(
-                messages: viewModel.visibleMailMessages,
+                messages: viewModel.focusedMailMessages,
                 summary: { viewModel.summary(for: $0) },
                 access: viewModel.mailAccess,
                 brief: viewModel.dayBrief,
                 briefFallback: viewModel.dayBriefFallback,
+                focusedName: viewModel.focusedPerson?.displayName,
                 onRefresh: { Task { await viewModel.refreshMail() } },
                 onOpen: { MailLinks.open(messageID: $0.id) },
                 recommendedBlock: { viewModel.recommendedBlock(for: $0, minutes: $1) },
@@ -161,7 +170,7 @@ struct ContentView: View {
 
             DailyBarChartView(
                 days: days,
-                spans: days.map { viewModel.span(for: $0) },
+                spans: days.map { viewModel.displaySpan(for: $0) },
                 recommendedHours: { viewModel.recommendedHours(for: $0) },
                 meetings: { viewModel.chartMeetings(for: $0) },
                 shiftTemplates: viewModel.preferences.shifts,
