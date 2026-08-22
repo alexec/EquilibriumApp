@@ -112,6 +112,17 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Whether the ranked list of past weeks is open — see
     /// `WeekRankingView`.
     @Published var showsWeekRanking = false
+    /// The person the week is being read through, when a chip in the strip
+    /// has been pressed: the bars show only their meetings and the inbox
+    /// only their messages, so "who is my week going to" can be answered
+    /// one person at a time.
+    ///
+    /// Only what's *displayed* narrows. The strip itself, the people in it,
+    /// the day brief and every hours figure go on being computed from the
+    /// whole week — a filter that also filtered the thing you filter with
+    /// would collapse the strip to the one chip you pressed, and a brief
+    /// about one colleague isn't a brief about your day.
+    @Published var focusedPerson: Person?
     /// What each repeating meeting has cost over the last quarter, keyed by
     /// `MeetingCost.key(for:)`. Gathered once per refresh rather than per
     /// popover: the figure is read when a meeting row is opened, and asking
@@ -1354,7 +1365,50 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Empty for a day outside the visible week, which is every day the
     /// chart isn't drawing.
     func chartMeetings(for day: Date) -> [DayMeeting] {
-        weekMeetingsByDay[dayKeyFormatter.string(from: day)] ?? []
+        let all = weekMeetingsByDay[dayKeyFormatter.string(from: day)] ?? []
+        guard let focusedPerson else { return all }
+        return all.filter { involves(focusedPerson, $0) }
+    }
+
+    /// Whether this person called or was invited to that meeting.
+    private func involves(_ person: Person, _ meeting: DayMeeting) -> Bool {
+        if meeting.organizer?.address == person.address { return true }
+        return meeting.participants.contains { $0.address == person.address }
+    }
+
+    /// Whether this message is from that person or was addressed to them.
+    private func involves(_ person: Person, _ message: MailMessage) -> Bool {
+        if message.sender.address == person.address { return true }
+        return message.recipients.contains { $0.address == person.address }
+    }
+
+    /// The messages the inbox column draws: everything visible, narrowed to
+    /// the focused person when there is one.
+    var focusedMailMessages: [MailMessage] {
+        guard let focusedPerson else { return visibleMailMessages }
+        return visibleMailMessages.filter { involves(focusedPerson, $0) }
+    }
+
+    /// The day as the chart should draw it.
+    ///
+    /// The same span, with its meeting blocks rebuilt from the focused
+    /// person's meetings only. The hours are left exactly as they are: you
+    /// worked those hours whoever was in the room, and redrawing the bar
+    /// shorter would be a lie told to make a point.
+    func displaySpan(for day: Date) -> WorkdaySpan? {
+        guard let focusedPerson, let span = span(for: day) else { return span(for: day) }
+        let theirs = (weekMeetingsByDay[dayKeyFormatter.string(from: day)] ?? [])
+            .filter { involves(focusedPerson, $0) }
+            .map { (start: $0.start, end: $0.end) }
+        var narrowed = span
+        narrowed.meetings = MeetingCalculator.mergedBlocks(fromIntervals: theirs, clippedTo: span)
+        return narrowed
+    }
+
+    /// Presses a chip in the people strip: focus that person, or clear the
+    /// focus when they're already the one being read through.
+    func toggleFocus(on person: Person) {
+        focusedPerson = focusedPerson?.address == person.address ? nil : person
     }
 
     func refreshDerivedMailState() {

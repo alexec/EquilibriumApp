@@ -28,6 +28,27 @@ enum MeetingCalculator {
         return merge(intervals)
     }
 
+    /// Merges intervals the caller already holds, clipping to `span` when
+    /// there is one.
+    ///
+    /// The two entry points above start from `EKEvent` because that's what
+    /// a calendar read hands back. This one exists for meetings the app is
+    /// already carrying as `DayMeeting` — filtering the bars to one
+    /// person's meetings, where going back to EventKit for events we have
+    /// in memory would be a query per day per click.
+    static func mergedBlocks(fromIntervals intervals: [(start: Date, end: Date)], clippedTo span: WorkdaySpan?) -> [MeetingBlock] {
+        let usable = intervals.compactMap { interval -> (start: Date, end: Date)? in
+            guard let span, !span.shifts.isEmpty else {
+                return interval.start < interval.end ? interval : nil
+            }
+            let clippedStart = max(interval.start, span.start)
+            let clippedEnd = min(interval.end, span.end)
+            guard clippedStart < clippedEnd else { return nil }
+            return (clippedStart, clippedEnd)
+        }
+        return merge(usable)
+    }
+
     private static func merge(_ intervals: [(start: Date, end: Date)]) -> [MeetingBlock] {
         let sorted = intervals.sorted { $0.start < $1.start }
         var merged: [(start: Date, end: Date)] = []

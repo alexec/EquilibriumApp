@@ -8,17 +8,34 @@ struct PersonActivity: Identifiable, Equatable {
     let isPrimary: Bool
     let messageCount: Int
     let meetingCount: Int
+    /// Minutes of this week's meetings they were in — the whole meeting,
+    /// not a share of it. Two people in the same hour have each had an hour
+    /// of your week, and dividing it between them would make a busy room
+    /// look cheap.
+    let meetingMinutes: Int
     /// The most recent thing they were part of, for ordering.
     let latest: Date
 
     var id: String { person.id }
 
-    /// How much of your week this person accounts for. The ordering key:
-    /// the people who have asked you for the most are the ones worth
-    /// seeing first.
-    var weight: Int { messageCount + meetingCount }
+    /// Hours of meetings with this person, which is what the chip leads
+    /// with: this app's unit is hours, and counts are trivia beside them.
+    var meetingHours: Double { Double(meetingMinutes) / 60.0 }
 
-    /// "2 emails · 1 meeting" — why this chip is here, in the fewest words.
+    /// How much of your week this person accounts for, in minutes.
+    ///
+    /// Time first, appearances second. Ordering by appearances alone put
+    /// whoever was copied on six threads above the person you sat with for
+    /// three hours — which is the question "who is in my week" answered by
+    /// volume rather than by cost, and cost is the one this app is for.
+    /// Each appearance still counts for something, so a person who has only
+    /// written sorts above one who has done nothing at all: a message isn't
+    /// free, it just isn't an hour, and five minutes is roughly what one
+    /// costs to read and answer.
+    var weight: Int { meetingMinutes + (messageCount + meetingCount) * 5 }
+
+    /// "2 emails · 1 meeting · 3h" — why this chip is here, and what it has
+    /// cost, in the fewest words.
     var reason: String {
         var parts: [String] = []
         if messageCount > 0 {
@@ -26,6 +43,12 @@ struct PersonActivity: Identifiable, Equatable {
         }
         if meetingCount > 0 {
             parts.append("\(meetingCount) meeting\(meetingCount == 1 ? "" : "s")")
+        }
+        // Only once it rounds to something. A five-minute overlap shown as
+        // "0h" would read as a bug, and half an hour is the smallest thing
+        // `HoursFormat` can say.
+        if meetingMinutes >= 30 {
+            parts.append(HoursFormat.string(meetingHours))
         }
         return parts.joined(separator: " · ")
     }
@@ -130,6 +153,7 @@ enum PeopleDirectory {
             var isPrimary = false
             var messageCount = 0
             var meetingCount = 0
+            var meetingMinutes = 0
             var latest = Date.distantPast
         }
         var tallies: [String: Tally] = [:]
@@ -142,7 +166,8 @@ enum PeopleDirectory {
             primary: Bool,
             at date: Date,
             message: Int = 0,
-            meeting: Int = 0
+            meeting: Int = 0,
+            minutes: Int = 0
         ) {
             // You are in every message you were sent and every meeting you
             // attend, so without this you are the person you work with most.
@@ -163,6 +188,7 @@ enum PeopleDirectory {
             tally.isPrimary = tally.isPrimary || primary
             tally.messageCount += message
             tally.meetingCount += meeting
+            tally.meetingMinutes += minutes
             tally.latest = max(tally.latest, date)
             tallies[person.address] = tally
         }
@@ -176,10 +202,10 @@ enum PeopleDirectory {
 
         for meeting in meetings {
             if let organizer = meeting.organizer {
-                record(organizer, primary: true, at: meeting.start, meeting: 1)
+                record(organizer, primary: true, at: meeting.start, meeting: 1, minutes: meeting.durationMinutes)
             }
             for participant in meeting.participants {
-                record(participant, primary: false, at: meeting.start, meeting: 1)
+                record(participant, primary: false, at: meeting.start, meeting: 1, minutes: meeting.durationMinutes)
             }
         }
 
@@ -190,11 +216,13 @@ enum PeopleDirectory {
                     isPrimary: $0.isPrimary,
                     messageCount: $0.messageCount,
                     meetingCount: $0.meetingCount,
+                    meetingMinutes: $0.meetingMinutes,
                     latest: $0.latest
                 )
             }
-            // Whoever accounts for the most of your week first, then
-            // primary over secondary, then most recent, then the address.
+            // Whoever accounts for the most of your week — in time, now,
+            // rather than in appearances — then primary over secondary,
+            // then most recent, then the address.
             //
             // Ordering by recency alone put whoever happened to write last
             // at the front, which is a fact about the clock rather than
