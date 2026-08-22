@@ -161,9 +161,6 @@ struct ContentView: View {
                         viewModel.selectDay(day)
                     }
                 },
-                onMeetingChange: { day, meetingID, newStart, newEnd in
-                    viewModel.updateMeeting(for: day, meetingID: meetingID, newStart: newStart, newEnd: newEnd)
-                },
                 onShiftChange: { day, shiftID, newStart, newEnd in
                     viewModel.updateShift(for: day, shiftID: shiftID, start: newStart, end: newEnd)
                 },
@@ -173,10 +170,6 @@ struct ContentView: View {
                 onShiftRemove: { day, shiftID in
                     viewModel.removeShift(for: day, shiftID: shiftID)
                 },
-                onMeetingRemove: { day, meetingID in
-                    viewModel.removeMeeting(for: day, meetingID: meetingID)
-                },
-                onResetMeetings: { day in viewModel.resetMeetings(for: day) },
                 onDelete: { day in viewModel.deleteHours(for: day) }
             )
             .overlay(alignment: .topTrailing) {
