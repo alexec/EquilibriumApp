@@ -19,6 +19,12 @@ struct EquilibriumApp: App {
         }
         UNUserNotificationCenter.current().delegate = notificationRouter
         DailyIntentionNotifier.reschedule(preferences: viewModel.preferences)
+        // Here rather than in the window, because the menu bar outlives the
+        // window: this app is one you close and leave running in the tray,
+        // and hanging the refresh timers off `ContentView`'s appearance
+        // meant closing the window froze the tray's line and stopped the
+        // power monitor recording sleeps. See `startAutoRefresh`.
+        viewModel.startAutoRefresh()
     }
 
     /// The day panel's contribution to the window's width. It's always on
