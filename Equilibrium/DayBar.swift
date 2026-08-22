@@ -46,6 +46,9 @@ struct GhostShift: Identifiable {
 /// with the shift capsules), each independently drag-editable — see
 /// `MeetingBlockView`. There's no "focus" segment: it was always a derived
 /// guess (effective hours minus meetings), never a directly known quantity.
+/// A block is drawn from an interval and nothing else, so what it stands for
+/// is only readable by hovering it — the title and times come from the day's
+/// events passed in beside it (`MeetingBlockDetails`).
 struct DayBar: View {
     let span: WorkdaySpan?
     /// The calendar day this bar represents — needed to construct real
@@ -59,6 +62,13 @@ struct DayBar: View {
     /// The configured shift slots (from `WorkPreferences`) the ghosts are
     /// drawn from.
     let shiftTemplates: [ShiftTemplate]
+    /// This day's calendar meetings, titles and all — what a meeting
+    /// capsule's hover tooltip is written from. The blocks drawn here are
+    /// bare intervals, so the names have to come from beside them; see
+    /// `MeetingBlockDetails`. Empty is a normal state (no calendar access,
+    /// a day older than EventKit keeps), and means the tooltip falls back to
+    /// the block's own times.
+    var meetings: [DayMeeting] = []
     /// Called when a press on the bar turns out to have been a plain click
     /// — on a shift, on a meeting, or on the bare track — which is how a
     /// day is opened in the side panel. A click on a ghost is not one of
@@ -183,6 +193,7 @@ struct DayBar: View {
                         dayStart: clampStart,
                         dayEnd: clampEnd,
                         color: DayFire.meetingColor(intensity: fireIntensity),
+                        tooltip: MeetingBlockDetails.tooltip(for: meeting, in: meetings),
                         onSelect: onSelect,
                         onRemove: { onMeetingRemove(meeting.id) },
                         onChange: { newStart, newEnd in
@@ -229,6 +240,11 @@ private struct MeetingBlockView: View {
     let dayStart: Date
     let dayEnd: Date
     let color: Color
+    /// What hovering this block says: the meeting's name, when, and how
+    /// long. Computed by the caller from the day's events rather than here,
+    /// so the matching happens once per block instead of once per redraw of
+    /// one — this view redraws on every point of a drag.
+    let tooltip: String
     let onSelect: () -> Void
     let onRemove: () -> Void
     let onChange: (Date, Date) -> Void
@@ -313,6 +329,21 @@ private struct MeetingBlockView: View {
         .contextMenu {
             Button("Delete Meeting", role: .destructive) { onRemove() }
         }
+        // The only place the meeting's name appears on the chart. A column
+        // is 18pt wide and a half-hour block a few points tall — too small
+        // for a label, and short blocks don't even get the hours one — so
+        // hovering is how one meeting is told from another without opening
+        // the day. On the block rather than the column, for the same reason
+        // its context menu is: the innermost one wins, so this replaces the
+        // shift layer's "click to open this day" wherever a meeting is
+        // actually under the pointer.
+        //
+        // Deliberately not an accessibility label as well. Every capsule
+        // carrying one would make each column a list of elements to step
+        // through, where the design is one focusable header per day; that
+        // header opens the panel, which lists the same meetings with their
+        // titles, times and organisers in a form VoiceOver can read.
+        .help(tooltip)
         .offset(y: topOffset)
     }
 

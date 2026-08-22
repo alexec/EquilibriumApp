@@ -4,7 +4,8 @@ import SwiftUI
 /// start-of-work to end-of-work time, scaled from 6am to midnight. Day
 /// columns stretch to fill the available width. Each meeting is a
 /// real-time-positioned block you can drag by its top edge, bottom edge, or
-/// middle; hover a day to reveal Delete / Reset-meetings buttons.
+/// middle, and hover to find out which meeting it is; hover a day to reveal
+/// Delete / Reset-meetings buttons.
 ///
 /// `days` is exactly one Sat-Fri week — the same unit the weekly target,
 /// the recommendation and the weekly summary all work in. Showing one week
@@ -15,6 +16,11 @@ struct DailyBarChartView: View {
     let days: [Date]
     let spans: [WorkdaySpan?]
     let recommendedHours: (Date) -> Double?
+    /// A day's calendar meetings, titles and all, for the hover tooltip on
+    /// its meeting capsules. A closure rather than a prepared array because
+    /// it's a cache lookup in the view model (`chartMeetings(for:)`) and the
+    /// chart already asks that way for the recommendation above.
+    let meetings: (Date) -> [DayMeeting]
     /// The configured shift slots (from `WorkPreferences`), passed through
     /// to each day's `DayBar` for the ghost outlines it offers.
     let shiftTemplates: [ShiftTemplate]
@@ -356,6 +362,7 @@ struct DailyBarChartView: View {
                 showsWorkdayTrack: true,
                 recommendedHours: recommendedHours(day),
                 shiftTemplates: shiftTemplates,
+                meetings: meetings(day),
                 onSelect: { onSelectDay(day) },
                 onMeetingChange: { meetingID, newStart, newEnd in
                     onMeetingChange(day, meetingID, newStart, newEnd)
