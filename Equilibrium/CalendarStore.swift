@@ -142,6 +142,40 @@ final class CalendarStore {
         }
     }
 
+    /// Every attended meeting between two dates, flattened for
+    /// `MeetingCost`.
+    ///
+    /// One predicate across the whole span rather than the per-day queries
+    /// the rest of this file makes: a quarter of days would be ninety
+    /// round-trips to EventKit for a figure shown in a popover, and the
+    /// per-day shape exists to clip meetings to a workday, which this
+    /// doesn't do.
+    ///
+    /// Same exclusions as `meetingEvents(on:)` — all-day events and events
+    /// marked free are blocked-out time, not meetings attended — so the
+    /// hours here agree with the hours on the bars.
+    func attendedMeetings(from start: Date, to end: Date) -> [MeetingCost.Occurrence] {
+        let scope = scopedCalendars()
+        if let scope, scope.isEmpty { return [] }
+        guard start < end else { return [] }
+
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: scope)
+        return store.events(matching: predicate).compactMap { event in
+            guard !event.isAllDay, event.availability != .free else { return nil }
+            guard let eventStart = event.startDate, let eventEnd = event.endDate, eventStart < eventEnd else {
+                return nil
+            }
+            return MeetingCost.Occurrence(
+                title: event.title ?? "",
+                start: eventStart,
+                end: eventEnd,
+                // The same flag the delete confirmation reads, and the
+                // reason this feature needs no new data.
+                isRecurring: event.hasRecurrenceRules
+            )
+        }
+    }
+
     /// The addresses EventKit recognises as *you*, gathered from the
     /// attendee lists of the days given.
     ///

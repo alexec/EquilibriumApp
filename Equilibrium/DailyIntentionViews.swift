@@ -65,6 +65,9 @@ struct DayDetailPanel: View {
     /// Removes a meeting from the calendar. Not a decline — see
     /// `MeetingActionPopover`.
     let onDeleteMeeting: (DayMeeting, CalendarStore.DeletionScope) -> Void
+    /// What a repeating meeting has cost over the last quarter, for the
+    /// popover behind its row.
+    let recurringCost: (DayMeeting) -> MeetingCost.Series?
     let onSave: (String, String, String) -> Void
 
     @State private var goals: String
@@ -98,6 +101,7 @@ struct DayDetailPanel: View {
         initialFocus: DailyPromptKind,
         deleteProblem: String?,
         onDeleteMeeting: @escaping (DayMeeting, CalendarStore.DeletionScope) -> Void,
+        recurringCost: @escaping (DayMeeting) -> MeetingCost.Series?,
         onSave: @escaping (String, String, String) -> Void
     ) {
         self.day = day
@@ -109,6 +113,7 @@ struct DayDetailPanel: View {
         self.initialFocus = initialFocus
         self.deleteProblem = deleteProblem
         self.onDeleteMeeting = onDeleteMeeting
+        self.recurringCost = recurringCost
         self.onSave = onSave
         _goals = State(initialValue: existing?.goals ?? "")
         _outcomes = State(initialValue: existing?.outcomes ?? "")
@@ -421,6 +426,7 @@ struct DayDetailPanel: View {
                     meeting: meeting,
                     day: day,
                     host: meetingHost(meeting),
+                    cost: recurringCost(meeting),
                     onDelete: onDeleteMeeting
                 )
             }
@@ -522,6 +528,10 @@ private struct MeetingRow: View {
     /// Who to name on the row — organiser where there is one. See
     /// `DayDetailPanel.meetingHost`.
     let host: (primary: Person, others: [Person])?
+    /// What this meeting's series has cost, for the popover. Read here
+    /// rather than inside the popover so the lookup happens once per row
+    /// instead of on every redraw of an open panel.
+    let cost: MeetingCost.Series?
     let onDelete: (DayMeeting, CalendarStore.DeletionScope) -> Void
 
     @State private var isHovering = false
@@ -572,6 +582,7 @@ private struct MeetingRow: View {
             MeetingActionPopover(
                 meeting: meeting,
                 day: day,
+                cost: cost,
                 onJoin: { url in
                     MeetingLinks.join(url)
                     showsActions = false

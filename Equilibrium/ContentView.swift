@@ -120,6 +120,7 @@ struct ContentView: View {
                 onDeleteMeeting: { meeting, scope in
                     Task { await viewModel.deleteMeeting(meeting, scope: scope) }
                 },
+                recurringCost: { viewModel.recurringCost(for: $0) },
                 // Nothing to dismiss and nothing to confirm: words are
                 // written as they're recognised, and the day's button
                 // filling in behind the panel is the confirmation.

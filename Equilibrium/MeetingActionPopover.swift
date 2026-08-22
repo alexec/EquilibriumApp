@@ -30,6 +30,10 @@ import SwiftUI
 struct MeetingActionPopover: View {
     let meeting: DayMeeting
     let day: Date
+    /// What this meeting's series has cost over the last quarter, when it
+    /// repeats. Nil for a one-off — an hour that happened once isn't a
+    /// decision anyone can make.
+    let cost: MeetingCost.Series?
     let onJoin: (URL) -> Void
     let onOpenInCalendar: () -> Void
     let onDelete: (CalendarStore.DeletionScope) -> Void
@@ -117,6 +121,18 @@ struct MeetingActionPopover: View {
                 .font(.system(size: 13, weight: .medium))
                 .fixedSize(horizontal: false, vertical: true)
 
+            // The one figure in this app that turns a standing commitment
+            // into a number you can decide about. Stated and left alone:
+            // there is no advice attached, and in particular no suggestion
+            // to decline, which this app cannot do and says so two
+            // paragraphs down.
+            if let cost, cost.occurrences > 1 {
+                Text(costLine(cost))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // Named rather than counted. The row outside says "Sarah +4",
             // which is what you scan; this is where you find out who the
             // four are, and it's the usual reason for opening the
@@ -146,6 +162,20 @@ struct MeetingActionPopover: View {
             }
         }
     }
+
+    /// "6h since 1 Jun, across 12 of them." Since the first one counted
+    /// rather than "this quarter": the window is ninety days, but a
+    /// fortnightly meeting that started in July has only been running since
+    /// July, and saying otherwise would overstate what it has cost.
+    private func costLine(_ cost: MeetingCost.Series) -> String {
+        "\(HoursFormat.string(cost.hours)) since \(Self.since.string(from: cost.first)), across \(cost.occurrences) of them."
+    }
+
+    private static let since: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMM"
+        return formatter
+    }()
 
     /// How many names are spelled out before the rest are counted. Six
     /// fills about four lines at this width, which is as much of the

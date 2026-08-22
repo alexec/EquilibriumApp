@@ -112,6 +112,12 @@ final class WorkHistoryViewModel: ObservableObject {
     /// Whether the ranked list of past weeks is open — see
     /// `WeekRankingView`.
     @Published var showsWeekRanking = false
+    /// What each repeating meeting has cost over the last quarter, keyed by
+    /// `MeetingCost.key(for:)`. Gathered once per refresh rather than per
+    /// popover: the figure is read when a meeting row is opened, and asking
+    /// EventKit for a quarter of events at that moment would put the delay
+    /// under the click.
+    @Published private(set) var recurringMeetingCosts: [String: MeetingCost.Series] = [:]
     /// The day shown in the panel beside the chart. Always set — the panel
     /// is permanent furniture rather than something you open — so this
     /// starts on today and only ever moves to another day.
@@ -416,6 +422,8 @@ final class WorkHistoryViewModel: ObservableObject {
             updated[key] = annotated
         }
 
+        refreshMeetingCosts()
+
         // Current week from today onward: always surface calendar meetings,
         // even when there's no workday yet (start == end → 0h placeholder).
         for date in currentWeekDays() where date >= today {
@@ -710,6 +718,36 @@ final class WorkHistoryViewModel: ObservableObject {
     /// the panel both work on whichever day you click, not just today.
     func intention(for day: Date) -> DailyIntention? {
         intentionsByDay[dayKey(for: day)]
+    }
+
+    /// How far back the meeting-cost figure looks. A quarter: long enough
+    /// that a weekly meeting has met a dozen times and the total is worth
+    /// reacting to, short enough that it's describing the job you have now.
+    private static let meetingCostWindowDays = 90
+
+    /// What this meeting's series has cost, when it repeats and there's a
+    /// history to add up. Nil for a one-off, which is not a lever anyone
+    /// can pull.
+    func recurringCost(for meeting: DayMeeting) -> MeetingCost.Series? {
+        guard meeting.isRecurring else { return nil }
+        return recurringMeetingCosts[MeetingCost.key(for: meeting.title)]
+    }
+
+    /// Re-reads the quarter behind us and adds up the repeating meetings in
+    /// it. One EventKit query, not ninety.
+    private func refreshMeetingCosts() {
+        guard calendarAccessGranted else {
+            recurringMeetingCosts = [:]
+            return
+        }
+        let now = Date()
+        guard let start = calendar.date(byAdding: .day, value: -Self.meetingCostWindowDays, to: calendar.startOfDay(for: now)) else {
+            return
+        }
+        let occurrences = CalendarStore.shared.attendedMeetings(from: start, to: now)
+        recurringMeetingCosts = Dictionary(
+            uniqueKeysWithValues: MeetingCost.series(in: occurrences).map { ($0.key, $0) }
+        )
     }
 
     /// Every finished week, heaviest first, with what was written in it.
